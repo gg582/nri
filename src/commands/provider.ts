@@ -4,7 +4,14 @@ import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { loadConfig, maskKey, saveGlobalConfig, type ProviderConfig } from "../config.js";
-import { availableProviders, isProviderName, PROVIDER_NAMES } from "../providers/factory.js";
+import {
+  availableProviders,
+  isProviderName,
+  providerCredentials,
+  PROVIDER_NAMES,
+  type ProviderName,
+} from "../providers/factory.js";
+import { fetchProviderModels } from "../providers/models.js";
 
 interface ImportResult {
   provider: string;
@@ -184,6 +191,40 @@ export function providerRemove(name?: string): void {
   stdout.write(`removed provider "${name}"\n`);
 }
 
+/**
+ * Fetch the live model list from each provider's API and store it in config.
+ * Refreshed models become candidates for `nri model assign` / `candidates`.
+ */
+export async function providerRefresh(name?: string): Promise<void> {
+  let targets: ProviderName[];
+  if (name) {
+    if (!isProviderName(name)) throw new Error(`unknown provider "${name}"`);
+    targets = [name];
+  } else {
+    targets = availableProviders();
+  }
+  if (targets.length === 0) {
+    stdout.write("no providers available — run `nri provider import` or `nri provider add` first.\n");
+    return;
+  }
+  for (const target of targets) {
+    const creds = providerCredentials(target);
+    if (!creds.apiKey) {
+      stdout.write(`${target}: no credentials — skipped.\n`);
+      continue;
+    }
+    try {
+      const models = await fetchProviderModels(target, { apiKey: creds.apiKey, baseURL: creds.baseURL });
+      const existing = loadConfig().providers ?? {};
+      saveGlobalConfig({ providers: { ...existing, [target]: { ...existing[target], models } } });
+      const sample = models.slice(0, 3).join(", ") + (models.length > 3 ? ", …" : "");
+      stdout.write(`${target}: ${models.length} models saved (${sample})\n`);
+    } catch (err) {
+      stdout.write(`${target}: refresh failed — ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  }
+}
+
 /** Entry point for `nri provider ...` / `nri /provider ...`. */
 export async function providerCommand(args: string[]): Promise<void> {
   const [sub, ...rest] = args;
@@ -201,7 +242,10 @@ export async function providerCommand(args: string[]): Promise<void> {
     case "remove":
       providerRemove(rest[0]);
       return;
+    case "refresh":
+      await providerRefresh(rest[0]);
+      return;
     default:
-      throw new Error(`unknown provider subcommand "${sub}" (list|import|add|remove)`);
+      throw new Error(`unknown provider subcommand "${sub}" (list|import|add|remove|refresh)`);
   }
 }

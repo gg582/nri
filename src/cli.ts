@@ -87,7 +87,7 @@ Usage:
   nri "<task>"                      console, with the task pre-submitted
   nri --cli -r "<task>" [options]   one-shot CLI run (explicit opt-in)
   nri help                          this reference
-  nri provider <list|import|add|remove>   manage providers (also: /provider)
+  nri provider <list|import|add|remove|refresh>   manage providers (also: /provider)
   nri model <list|assign|set|candidates>  per-node model routing (also: /model)
   nri permission <list|set-mode|allow|deny|clear>   execution policy (also: /permission)
   nri plan "<request>"                    read-only planning run (also: /plan)
@@ -116,9 +116,10 @@ Commands:
   nri provider import [kimi-code|codex]   auto-import credentials from existing AI clients
   nri provider add [name]                 manual interactive entry
   nri provider remove <name>              remove stored credentials
+  nri provider refresh [name]             fetch live model lists from provider APIs
   nri model list                          current per-node routing table
   nri model assign                        multi-select models, auto-assign per node capability
-  nri model set <node|default> <provider:model>
+  nri model set <node|default> <provider:model> [more models...]   ordered trial pool
   nri model candidates                    list selectable provider:model specs
 
 Environment:
@@ -153,6 +154,11 @@ async function launchConsole(initialRequest?: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // Piping into `head` etc. closes stdout early — exit quietly instead of crashing on EPIPE.
+  stdout.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EPIPE") process.exit(0);
+    throw err;
+  });
   // Subcommands: accept both "provider" and "/provider" spellings.
   const command = argv[2]?.replace(/^\//, "");
   if (command === "help") {
@@ -240,7 +246,8 @@ async function main(): Promise<void> {
   const routing = loadConfig().routing;
   const resolver = makeProviderResolver({ provider: args.provider, model: args.model });
   if (routing?.default || Object.keys(routing?.nodes ?? {}).length > 0) {
-    stdout.write(`nri: routing from config (default=${routing?.default ?? "cli"})\n`);
+    const { formatSpec } = await import("./commands/model.js");
+    stdout.write(`nri: routing from config (default=${formatSpec(routing?.default) ?? "cli"})\n`);
   } else {
     const head = resolver("triage");
     stdout.write(`nri: provider=${head.name} model=${head.model}\n`);

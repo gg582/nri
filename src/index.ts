@@ -1,8 +1,9 @@
 export { buildGraph, runNri, resumeNri } from "./graph/builder.js";
 export type { NriRunInput, NriRunResult, CompiledNriGraph, GraphDeps, BuildGraphOptions } from "./graph/builder.js";
 export { compactState, graphCompactState } from "./graph/compact.js";
-export { createProvider, PROVIDER_NAMES, isProviderName, availableProviders, parseModelSpec, defaultModelFor, modelsForProvider } from "./providers/factory.js";
+export { createProvider, PROVIDER_NAMES, isProviderName, availableProviders, providerCredentials, parseModelSpec, defaultModelFor, modelsForProvider } from "./providers/factory.js";
 export type { ProviderName } from "./providers/factory.js";
+export { fetchProviderModels } from "./providers/models.js";
 export { makeProviderResolver } from "./providers/resolver.js";
 export type { LLMProviderStrategy, ChatMessage, InvokeOptions } from "./providers/base.js";
 export { createTestRunner } from "./tools/factory.js";

@@ -72,6 +72,15 @@ export function availableProviders(): ProviderName[] {
   );
 }
 
+/** Credentials for direct provider API calls (e.g. model listing): stored config > env. */
+export function providerCredentials(name: ProviderName): { apiKey?: string; baseURL?: string } {
+  const stored = loadConfig().providers?.[name];
+  return {
+    apiKey: stored?.apiKey ?? ENV_KEYS[name].map((k) => process.env[k]).find(Boolean),
+    baseURL: stored?.baseURL,
+  };
+}
+
 /** Default model for a provider: stored config default > built-in default. */
 export function defaultModelFor(name: ProviderName): string {
   return loadConfig().providers?.[name]?.defaultModel ?? DEFAULT_MODELS[name];

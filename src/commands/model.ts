@@ -39,27 +39,42 @@ export function getCandidates(): Candidate[] {
   return out;
 }
 
-/** Assign selected models to node tiers by capability. */
-export function assignByCapability(selected: Candidate[]): Record<string, string> {
-  const pick = (tier: Tier): string | undefined =>
-    selected.find((c) => c.tier === tier)?.spec;
-  const strong = pick("strong") ?? pick("mid") ?? pick("fast");
-  const mid = pick("mid") ?? pick("strong") ?? pick("fast");
-  const fast = pick("fast") ?? pick("mid") ?? pick("strong");
-  const nodes: Record<string, string> = {};
-  for (const n of NODE_TIERS.strong) if (strong) nodes[n] = strong;
-  for (const n of NODE_TIERS.mid) if (mid) nodes[n] = mid;
-  for (const n of NODE_TIERS.fast) if (fast) nodes[n] = fast;
+/**
+ * Assign selected models to node tiers by capability. Each node gets an
+ * ordered trial pool: its own tier first, then the other tiers — routing
+ * trials stay within the checked models only.
+ */
+export function assignByCapability(selected: Candidate[]): Record<string, string[]> {
+  const pool = (tier: Tier): string[] => selected.filter((c) => c.tier === tier).map((c) => c.spec);
+  const chain = (...tiers: Tier[]): string[] => [...new Set(tiers.flatMap(pool))];
+  const strong = chain("strong", "mid", "fast");
+  const mid = chain("mid", "strong", "fast");
+  const fast = chain("fast", "mid", "strong");
+  const nodes: Record<string, string[]> = {};
+  for (const n of NODE_TIERS.strong) if (strong.length) nodes[n] = strong;
+  for (const n of NODE_TIERS.mid) if (mid.length) nodes[n] = mid;
+  for (const n of NODE_TIERS.fast) if (fast.length) nodes[n] = fast;
   return nodes;
 }
 
+/** Default trial pool: strongest tier first, selection order within a tier. */
+function defaultPool(selected: Candidate[]): string[] {
+  const tiers: Tier[] = ["strong", "mid", "fast"];
+  return [...new Set(tiers.flatMap((t) => selected.filter((c) => c.tier === t).map((c) => c.spec)))];
+}
+
+/** Render a routing value (single spec or trial pool) for display. */
+export function formatSpec(value?: string | string[]): string | undefined {
+  return value && (Array.isArray(value) ? value.join(" → ") : value);
+}
+
 /** Non-interactive assignment (used by the TUI wizard): apply and save. */
-export function applyAssignment(pickedSpecs: string[]): { defaultSpec: string; nodes: Record<string, string> } {
+export function applyAssignment(pickedSpecs: string[]): { defaultSpec: string[]; nodes: Record<string, string[]> } {
   const all = getCandidates();
   const picked = pickedSpecs
     .map((spec) => all.find((c) => c.spec === spec) ?? { spec, tier: modelTier(spec.split(":")[1] ?? spec) });
   const nodes = assignByCapability(picked);
-  const defaultSpec = picked.find((c) => c.tier === "strong")?.spec ?? picked[0].spec;
+  const defaultSpec = defaultPool(picked);
   const routing = loadConfig().routing ?? {};
   saveGlobalConfig({ routing: { ...routing, default: defaultSpec, nodes } });
   return { defaultSpec, nodes };
@@ -69,24 +84,26 @@ export function applyAssignment(pickedSpecs: string[]): { defaultSpec: string; n
 
 export function modelList(): void {
   const routing = loadConfig().routing ?? {};
-  stdout.write(`default: ${routing.default ?? "(unset — uses --provider/NRI_PROVIDER)"}\n`);
+  stdout.write(`default: ${formatSpec(routing.default) ?? "(unset — uses --provider/NRI_PROVIDER)"}\n`);
   const all = [...NODE_TIERS.strong, ...NODE_TIERS.mid, ...NODE_TIERS.fast];
   for (const node of all) {
     const tier = NODE_TIERS.strong.includes(node) ? "strong" : NODE_TIERS.mid.includes(node) ? "mid" : "fast";
-    stdout.write(`  ${node.padEnd(18)} [${tier.padEnd(6)}] ${routing.nodes?.[node] ?? "(default)"}\n`);
+    stdout.write(`  ${node.padEnd(18)} [${tier.padEnd(6)}] ${formatSpec(routing.nodes?.[node]) ?? "(default)"}\n`);
   }
 }
 
-export function modelSet(target?: string, spec?: string): void {
-  if (!target || !spec) throw new Error('usage: nri model set <node|default> <provider:model>');
-  parseModelSpec(spec); // validates provider name
+export function modelSet(target?: string, specs: string[] = []): void {
+  if (!target || specs.length === 0)
+    throw new Error("usage: nri model set <node|default> <provider:model> [more models...]");
+  for (const spec of specs) parseModelSpec(spec); // validates provider names
+  const value: string | string[] = specs.length === 1 ? specs[0] : specs;
   const routing = loadConfig().routing ?? {};
   if (target === "default") {
-    saveGlobalConfig({ routing: { ...routing, default: spec } });
+    saveGlobalConfig({ routing: { ...routing, default: value } });
   } else {
-    saveGlobalConfig({ routing: { ...routing, nodes: { ...routing.nodes, [target]: spec } } });
+    saveGlobalConfig({ routing: { ...routing, nodes: { ...routing.nodes, [target]: value } } });
   }
-  stdout.write(`routing: ${target} -> ${spec}\n`);
+  stdout.write(`routing: ${target} -> ${formatSpec(value)}\n`);
 }
 
 export async function modelAssign(): Promise<void> {
@@ -109,17 +126,17 @@ export async function modelAssign(): Promise<void> {
       return;
     }
     const nodes = assignByCapability(picked);
-    const defaultSpec = picked.find((c) => c.tier === "strong")?.spec ?? picked[0].spec;
-    stdout.write("\nproposed routing:\n");
-    stdout.write(`  default -> ${defaultSpec}\n`);
-    for (const [node, spec] of Object.entries(nodes)) stdout.write(`  ${node} -> ${spec}\n`);
+    const defPool = defaultPool(picked);
+    stdout.write("\nproposed routing (→ = trial order, fallback on failure):\n");
+    stdout.write(`  default -> ${defPool.join(" → ")}\n`);
+    for (const [node, spec] of Object.entries(nodes)) stdout.write(`  ${node} -> ${spec.join(" → ")}\n`);
     const ok = (await rl.question("\napply? [y/N] ")).trim().toLowerCase();
     if (ok !== "y") {
       stdout.write("aborted.\n");
       return;
     }
     const routing = loadConfig().routing ?? {};
-    saveGlobalConfig({ routing: { ...routing, default: defaultSpec, nodes } });
+    saveGlobalConfig({ routing: { ...routing, default: defPool, nodes } });
     stdout.write("saved.\n");
   } finally {
     rl.close();
@@ -135,7 +152,7 @@ export async function modelCommand(args: string[]): Promise<void> {
       modelList();
       return;
     case "set":
-      modelSet(rest[0], rest[1]);
+      modelSet(rest[0], rest.slice(1));
       return;
     case "assign":
       await modelAssign();

@@ -13,10 +13,14 @@ export interface ProviderConfig {
   note?: string;
 }
 
-/** Per-node model routing: values are "provider:model" or "provider" specs. */
+/**
+ * Per-node model routing. Values are "provider:model" (or bare "provider")
+ * specs — a single spec, or an ordered trial pool: on invoke failure the
+ * resolver falls back to the next spec in the pool.
+ */
 export interface RoutingConfig {
-  default?: string;
-  nodes?: Record<string, string>;
+  default?: string | string[];
+  nodes?: Record<string, string | string[]>;
 }
 
 export interface NriConfig {

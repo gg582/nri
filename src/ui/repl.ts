@@ -21,8 +21,8 @@ export async function capture(fn: () => Promise<void> | void): Promise<string[]>
 
 export const HELP_LINES = [
   "slash commands (mirrors of the CLI subcommands):",
-  "  /provider list|import [kimi-code|codex]|add [n]|remove <n>",
-  "  /model list|assign|set <node|default> <provider:model>|candidates",
+  "  /provider list|import [kimi-code|codex]|add [n]|remove <n>|refresh [n]",
+  "  /model list|assign|set <node|default> <provider:model> [more...]|candidates",
   "  /permission list|set-mode <plan|auto|yolo>|allow <re>|deny <re>|clear <allow|deny>",
   "  /plan <request>                 read-only plan, nothing executed",
   "  /goal set \"<obj>\" [--done-when X --budget N] | status | run | clear",
@@ -41,7 +41,7 @@ export const HELP_LINES = [
 
 type Wizard =
   | { kind: "provider-add"; step: number; data: { name?: string; apiKey?: string; baseURL?: string; defaultModel?: string } }
-  | { kind: "model-assign"; step: number; data: { picked?: string[]; defaultSpec?: string; nodes?: Record<string, string> } };
+  | { kind: "model-assign"; step: number; data: { picked?: string[]; nodes?: Record<string, string[]> } };
 
 const PROVIDER_ADD_STEPS = ["provider name", "api key (empty = env)", "base url (optional)", "default model (optional)"];
 
@@ -185,7 +185,7 @@ export class Repl {
     }
     // model-assign
     if (w.step === 0) {
-      const { getCandidates, assignByCapability } = await import("../commands/model.js");
+      const { getCandidates, assignByCapability, formatSpec } = await import("../commands/model.js");
       const all = getCandidates();
       const picked = [...new Set(text.split(/[\s,]+/).filter(Boolean).map((s) => Number(s) - 1))]
         .map((i) => all[i]?.spec)
@@ -197,20 +197,18 @@ export class Repl {
       }
       const candidates = picked.map((spec) => all.find((c) => c.spec === spec)!);
       const nodes = assignByCapability(candidates);
-      const defaultSpec = candidates.find((c) => c.tier === "strong")?.spec ?? picked[0];
       this.push(
-        "proposed routing:",
-        `  default -> ${defaultSpec}`,
-        ...Object.entries(nodes).map(([n, s]) => `  ${n} -> ${s}`),
+        "proposed routing (→ = trial order, fallback on failure):",
+        ...Object.entries(nodes).map(([n, s]) => `  ${n} -> ${formatSpec(s)}`),
         "apply? [y/N]",
       );
-      this.wizard = { kind: "model-assign", step: 1, data: { picked, defaultSpec, nodes } };
+      this.wizard = { kind: "model-assign", step: 1, data: { picked, nodes } };
       return;
     }
     if (text.trim().toLowerCase() === "y") {
-      const { applyAssignment } = await import("../commands/model.js");
+      const { applyAssignment, formatSpec } = await import("../commands/model.js");
       const { defaultSpec, nodes } = applyAssignment(w.data.picked!);
-      this.push("saved.", `  default -> ${defaultSpec}`, ...Object.entries(nodes).map(([n, s]) => `  ${n} -> ${s}`));
+      this.push("saved.", `  default -> ${formatSpec(defaultSpec)}`, ...Object.entries(nodes).map(([n, s]) => `  ${n} -> ${formatSpec(s)}`));
     } else {
       this.push("aborted.");
     }

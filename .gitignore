@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.nri-workspace/
+.env
+*.log

@@ -12,6 +12,8 @@ export interface StrategyOptions {
   model?: string;
   apiKey?: string;
   baseURL?: string;
+  /** Credential mechanism hint from config, e.g. "codex-oauth". */
+  auth?: string;
 }
 
 function toLangChainMessages(messages: ChatMessage[]): BaseMessage[] {
@@ -84,12 +86,21 @@ export class OpenAICompatibleStrategy extends BaseProviderStrategy {
   }
 
   private createClient(opts?: InvokeOptions): ChatOpenAI {
+    // gpt-5 / o-series reject `temperature` (only the default 1 is allowed) and
+    // the legacy `max_tokens` param. LangChain's isReasoningModel regex only
+    // covers o-series, so handle it here: omit temperature and pass
+    // max_completion_tokens through modelKwargs.
+    const fixedSampling = /^(gpt-5|o\d)/i.test(this.args.model);
     return new ChatOpenAI({
       model: this.args.model,
       apiKey: this.args.apiKey,
       configuration: this.args.baseURL ? { baseURL: this.args.baseURL } : undefined,
-      temperature: opts?.temperature ?? this.args.defaultTemperature ?? 0,
-      maxTokens: opts?.maxTokens,
+      ...(fixedSampling
+        ? { modelKwargs: opts?.maxTokens ? { max_completion_tokens: opts.maxTokens } : {} }
+        : {
+            temperature: opts?.temperature ?? this.args.defaultTemperature ?? 0,
+            maxTokens: opts?.maxTokens,
+          }),
     });
   }
 

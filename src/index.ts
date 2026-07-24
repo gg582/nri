@@ -4,6 +4,7 @@ export { compactState, graphCompactState } from "./graph/compact.js";
 export { createProvider, PROVIDER_NAMES, isProviderName, availableProviders, providerCredentials, parseModelSpec, defaultModelFor, modelsForProvider } from "./providers/factory.js";
 export type { ProviderName } from "./providers/factory.js";
 export { fetchProviderModels } from "./providers/models.js";
+export { CodexStrategy, codexAuthAvailable } from "./providers/codex.js";
 export { makeProviderResolver } from "./providers/resolver.js";
 export type { LLMProviderStrategy, ChatMessage, InvokeOptions } from "./providers/base.js";
 export { createTestRunner } from "./tools/factory.js";

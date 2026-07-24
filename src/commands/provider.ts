@@ -12,6 +12,7 @@ import {
   type ProviderName,
 } from "../providers/factory.js";
 import { fetchProviderModels } from "../providers/models.js";
+import { codexCliDefaults } from "../providers/codex.js";
 
 interface ImportResult {
   provider: string;
@@ -60,12 +61,29 @@ function importKimiCode(): ImportResult[] {
   ];
 }
 
-/** codex: ~/.codex/auth.json holds a plain OPENAI_API_KEY. */
+/** codex: ~/.codex/auth.json — oauth tokens (ChatGPT plan) preferred, else a plain OPENAI_API_KEY. */
 function importCodex(): ImportResult[] {
   const authPath = join(homedir(), ".codex", "auth.json");
   if (!existsSync(authPath)) return [];
   try {
-    const auth = JSON.parse(readFileSync(authPath, "utf8")) as { OPENAI_API_KEY?: string };
+    const auth = JSON.parse(readFileSync(authPath, "utf8")) as {
+      OPENAI_API_KEY?: string;
+      tokens?: { access_token?: string };
+    };
+    if (auth.tokens?.access_token) {
+      const defaults = codexCliDefaults();
+      return [
+        {
+          provider: "openai",
+          source: "codex",
+          config: {
+            auth: "codex-oauth",
+            ...(defaults.model ? { defaultModel: defaults.model } : {}),
+            note: "imported from codex auth.json (oauth; tokens re-read from ~/.codex/auth.json per call)",
+          },
+        },
+      ];
+    }
     if (!auth.OPENAI_API_KEY) return [];
     return [
       {

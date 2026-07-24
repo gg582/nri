@@ -7,6 +7,8 @@ export interface ProviderConfig {
   apiKey?: string;
   baseURL?: string;
   defaultModel?: string;
+  /** Credential mechanism: "codex-oauth" = tokens from ~/.codex/auth.json. */
+  auth?: string;
   /** Extra model ids offered by this provider (e.g. imported from kimi-code). */
   models?: string[];
   /** Free-form provenance note, e.g. "imported from kimi-code (oauth token, expires ...)". */

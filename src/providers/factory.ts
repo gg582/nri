@@ -1,5 +1,6 @@
 import { loadConfig } from "../config.js";
 import type { LLMProviderStrategy } from "./base.js";
+import { CodexStrategy, codexAuthAvailable } from "./codex.js";
 import {
   ClaudeStrategy,
   DeepSeekStrategy,
@@ -34,7 +35,13 @@ const ENV_KEYS: Record<ProviderName, string[]> = {
 
 /** Registry mapping provider name -> strategy constructor (Strategy pattern). */
 const registry: Record<ProviderName, (opts: StrategyOptions) => LLMProviderStrategy> = {
-  openai: (o) => new OpenAIStrategy(o),
+  // OpenAI credential precedence: explicit/stored API key > codex oauth
+  // (imported) > OPENAI_API_KEY env. codex oauth serves ChatGPT-plan models
+  // (gpt-5.6-*) that API keys without credit cannot call.
+  openai: (o) =>
+    o.apiKey || o.auth !== "codex-oauth" || !codexAuthAvailable()
+      ? new OpenAIStrategy(o)
+      : new CodexStrategy(o),
   gemini: (o) => new GeminiStrategy(o),
   kimi: (o) => new KimiStrategy(o),
   deepseek: (o) => new DeepSeekStrategy(o),
@@ -61,6 +68,7 @@ export function createProvider(name?: string, options: StrategyOptions = {}): LL
     model: options.model ?? stored.defaultModel,
     apiKey: options.apiKey ?? stored.apiKey,
     baseURL: options.baseURL ?? stored.baseURL,
+    auth: stored.auth,
   });
 }
 
@@ -68,7 +76,10 @@ export function createProvider(name?: string, options: StrategyOptions = {}): LL
 export function availableProviders(): ProviderName[] {
   const stored = loadConfig().providers ?? {};
   return PROVIDER_NAMES.filter(
-    (name) => ENV_KEYS[name].some((k) => process.env[k]) || stored[name]?.apiKey,
+    (name) =>
+      ENV_KEYS[name].some((k) => process.env[k]) ||
+      stored[name]?.apiKey ||
+      (stored[name]?.auth === "codex-oauth" && codexAuthAvailable()),
   );
 }
 

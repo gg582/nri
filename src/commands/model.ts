@@ -95,7 +95,12 @@ export function modelList(): void {
 export function modelSet(target?: string, specs: string[] = []): void {
   if (!target || specs.length === 0)
     throw new Error("usage: nri model set <node|default> <provider:model> [more models...]");
-  for (const spec of specs) parseModelSpec(spec); // validates provider names
+  const available = new Set(availableProviders());
+  for (const spec of specs) {
+    const { provider } = parseModelSpec(spec); // validates provider names
+    if (!available.has(provider))
+      stdout.write(`warning: provider "${provider}" has no credentials — it will fail and fall back.\n`);
+  }
   const value: string | string[] = specs.length === 1 ? specs[0] : specs;
   const routing = loadConfig().routing ?? {};
   if (target === "default") {

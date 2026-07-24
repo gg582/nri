@@ -1,6 +1,6 @@
 {
   "name": "@gg582/nri",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Adaptive agentic engineering harness: triage-routed dual-path (FAST/HEAVY) agent with business-logic pre-flight validation, abstract-graph planning, coverage-driven loops and self-applying diffs. Built on LangGraph.",
   "license": "MIT",
   "type": "module",

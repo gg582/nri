@@ -117,12 +117,13 @@ async function applyUnifiedDiff(plan: ApplyPlan): Promise<string[]> {
   await writeFile(tmp, diffText, "utf8");
   const gate = checkPermission("git apply");
   if (!gate.allowed) return [`apply blocked: ${gate.reason}`];
+  const notes = gate.advisory ? [`[warn] ${gate.advisory}`] : [];
   await backup(plan.changes.map((c) => c.path));
   try {
     await execAsync("git apply --whitespace=fix " + JSON.stringify(tmp), { timeout: 30_000 });
-    return [`applied unified diff to ${plan.changes.length} file(s) via git apply`];
+    return [...notes, `applied unified diff to ${plan.changes.length} file(s) via git apply`];
   } catch (err) {
-    return [`git apply failed: ${err instanceof Error ? err.message.split("\n")[0] : err}`];
+    return [...notes, `git apply failed: ${err instanceof Error ? err.message.split("\n")[0] : err}`];
   }
 }
 
@@ -136,7 +137,11 @@ async function applyFileBlocks(plan: ApplyPlan): Promise<string[]> {
     await writeFile(c.path, c.content, "utf8");
     lines.push(`  wrote ${c.path}`);
   }
-  return [`applied ${plan.changes.length} file(s):`, ...lines];
+  return [
+    ...(gate.advisory ? [`[warn] ${gate.advisory}`] : []),
+    `applied ${plan.changes.length} file(s):`,
+    ...lines,
+  ];
 }
 
 /**

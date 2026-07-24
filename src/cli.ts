@@ -90,6 +90,7 @@ Usage:
   nri provider <list|import|add|remove|refresh>   manage providers (also: /provider)
   nri model <list|assign|set|candidates>  per-node model routing (also: /model)
   nri permission <list|set-mode|allow|deny|clear>   execution policy (also: /permission)
+  nri yolo [off]                          toggle yolo permission mode (also: /yolo)
   nri plan "<request>"                    read-only planning run (also: /plan)
   nri goal <set|status|run|clear>         durable goal mode (also: /goal)
   nri swarm [--providers a,b] "<request>" parallel multi-provider comparison (also: /swarm)
@@ -178,6 +179,11 @@ async function main(): Promise<void> {
   if (command === "permission") {
     const { permissionCommand } = await import("./commands/permission.js");
     await permissionCommand(argv.slice(3));
+    return;
+  }
+  if (command === "yolo") {
+    const { permissionCommand } = await import("./commands/permission.js");
+    await permissionCommand(["set-mode", argv[3] === "off" ? "auto" : "yolo"]);
     return;
   }
   if (command === "plan") {

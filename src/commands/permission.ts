@@ -9,7 +9,7 @@ function list(): void {
   stdout.write(`mode:  ${perms.mode ?? "auto (default)"}\n`);
   stdout.write(`allow: ${(perms.allow ?? []).join(", ") || "(none)"}\n`);
   stdout.write(`deny:  ${(perms.deny ?? []).join(", ") || "(none)"}\n`);
-  stdout.write("\nmodes: plan = execute nothing | auto = block destructive+deny-listed | yolo = allow all\n");
+  stdout.write("\nmodes: plan = execute nothing | auto = block destructive+deny-listed | yolo = allow all (advisory only)\n");
 }
 
 export async function permissionCommand(args: string[]): Promise<void> {

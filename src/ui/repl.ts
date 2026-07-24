@@ -24,6 +24,7 @@ export const HELP_LINES = [
   "  /provider list|import [kimi-code|codex]|add [n]|remove <n>|refresh [n]",
   "  /model list|assign|set <node|default> <provider:model> [more...]|candidates",
   "  /permission list|set-mode <plan|auto|yolo>|allow <re>|deny <re>|clear <allow|deny>",
+  "  /yolo [off]                       toggle yolo mode (gates off, advisory only)",
   "  /plan <request>                 read-only plan, nothing executed",
   "  /goal set \"<obj>\" [--done-when X --budget N] | status | run | clear",
   "  /swarm [--providers a,b] [--coverage N] <request>",
@@ -132,6 +133,14 @@ export class Repl {
       case "permission": {
         const { permissionCommand } = await import("../commands/permission.js");
         this.push(...(await capture(() => permissionCommand(rest))));
+        return;
+      }
+      case "yolo": {
+        const off = rest[0] === "off";
+        const { permissionCommand } = await import("../commands/permission.js");
+        this.push(...(await capture(() => permissionCommand(["set-mode", off ? "auto" : "yolo"]))));
+        if (!off)
+          this.push("yolo: permission gates off — deny-listed/destructive commands run with advisory only. `/yolo off` reverts.");
         return;
       }
       case "plan": {

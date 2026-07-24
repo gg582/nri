@@ -62,6 +62,7 @@ export class McpCoverageRunner implements TestRunner {
     if (!gate.allowed) {
       return { coverage: 0, passed: false, output: `permission denied: ${gate.reason}` };
     }
+    const advisory = gate.advisory ? `[warn] ${gate.advisory}\n` : "";
 
     const result = await client.callTool({
       name: toolName,
@@ -74,7 +75,7 @@ export class McpCoverageRunner implements TestRunner {
           .join("\n")
       : String(result.content ?? "");
     const coverage = parseCoverage(text) ?? 0;
-    return { coverage, passed: !result.isError, output: text };
+    return { coverage, passed: !result.isError, output: advisory + text };
   }
 
   async close(): Promise<void> {

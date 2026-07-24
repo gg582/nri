@@ -49,13 +49,14 @@ export class ShellTestRunner implements TestRunner {
     if (!gate.allowed) {
       return { coverage: 0, passed: false, output: `permission denied: ${gate.reason}` };
     }
+    const advisory = gate.advisory ? `[warn] ${gate.advisory}\n` : "";
     const dir = join(this.workspace, `iter-${iteration}`);
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "implementation.ts"), code, "utf8");
     await writeFile(join(dir, "implementation.test.ts"), tests, "utf8");
     try {
       const { stdout, stderr } = await execAsync(this.command, { cwd: dir, timeout: 120_000 });
-      const output = `${stdout}\n${stderr}`;
+      const output = `${advisory}${stdout}\n${stderr}`;
       const coverage = parseCoverage(output);
       if (coverage === null) throw new Error(`Could not parse coverage from test output:\n${output}`);
       return { coverage, passed: true, output };

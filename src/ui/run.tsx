@@ -23,7 +23,6 @@ export interface UiRunOptions {
 export async function runWithUi(opts: UiRunOptions): Promise<number> {
   const resolver = makeProviderResolver({ provider: opts.provider, model: opts.model });
   const head = resolver("triage");
-  const graph = buildGraph({ resolveProvider: resolver, testRunner: createTestRunner() });
   const threadId = `nri-ui-${Date.now()}`;
   const config = { configurable: { thread_id: threadId } };
 
@@ -58,6 +57,19 @@ export async function runWithUi(opts: UiRunOptions): Promise<number> {
         onReject={() => approvalResolve?.(false)}
       />,
     );
+
+  // Mark the phase as soon as a node starts, not only when its update lands.
+  const graph = buildGraph(
+    { resolveProvider: resolver, testRunner: createTestRunner() },
+    {
+      hooks: {
+        onNodeStart: (node) => {
+          state.phase = node;
+          rerender();
+        },
+      },
+    },
+  );
 
   const drive = async (input: Record<string, unknown> | null) => {
     const stream = await graph.stream(input as never, { ...config, streamMode: "updates" });

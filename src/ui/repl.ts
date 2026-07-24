@@ -1,4 +1,4 @@
-import { buildGraph, resumeNri, runNri } from "../graph/builder.js";
+import { buildGraph } from "../graph/builder.js";
 import { makeProviderResolver } from "../providers/resolver.js";
 import { createTestRunner } from "../tools/factory.js";
 import type { AgentStateType } from "../state.js";
@@ -69,18 +69,69 @@ export class Repl {
   }
 
   private async runRequest(request: string): Promise<void> {
-    const graph = buildGraph({ resolveProvider: makeProviderResolver({}), testRunner: createTestRunner() });
+    const resolver = makeProviderResolver({});
+    // Liveness: node-start lines + a heartbeat while a node runs long, so a
+    // slow LLM call never looks like a hang.
+    let runningNode: string | null = null;
+    let runningSince = 0;
+    const graph = buildGraph(
+      { resolveProvider: resolver, testRunner: createTestRunner() },
+      {
+        hooks: {
+          onNodeStart: (node) => {
+            runningNode = node;
+            runningSince = Date.now();
+            const p = resolver(node);
+            this.push(`▶ ${node} (${p.name}/${p.model})`);
+          },
+          onNodeEnd: (node) => {
+            if (runningNode === node) runningNode = null;
+          },
+        },
+      },
+    );
+    const heartbeat = setInterval(() => {
+      if (runningNode) {
+        this.push(`  …${runningNode} running ${Math.round((Date.now() - runningSince) / 1000)}s`);
+      }
+    }, 15_000);
     const threadId = `nri-tui-${Date.now()}`;
     const config = { configurable: { thread_id: threadId } };
-    let run = await runNri(graph, { request, targetTestCoverage: 80, threadId });
-    for (let i = 0; i < 10 && run.awaitingApproval; i++) {
-      this.push("  [hitl] proposal graph auto-approved");
-      await resumeNri(graph, null, threadId);
-      const snap = await graph.getState(config);
-      run = { finalState: snap.values as AgentStateType, awaitingApproval: snap.next.includes("human_approval") };
+
+    try {
+      // Stream node-level updates so the pipeline's reasoning is visible live
+      // as it scrolls by, instead of one black-box dump when the run ends.
+      const drive = async (input: Record<string, unknown> | null): Promise<void> => {
+        const stream = await graph.stream(input as never, { ...config, streamMode: "updates" });
+        for await (const chunk of stream) {
+          for (const [node, update] of Object.entries(chunk)) {
+            const u = update as Partial<AgentStateType> | undefined;
+            const lines = Array.isArray(u?.trace) ? u.trace : [];
+            if (lines.length > 0) this.push(...lines.map((l) => `  ${l}`));
+            else this.push(`  [${node}]`);
+          }
+        }
+      };
+
+      await drive({
+        rawRequest: request,
+        outputLocale: "en-US",
+        targetTestCoverage: 80,
+        maxIterations: 5,
+      });
+
+      // HITL loop: the heavy path pauses at human_approval; auto-approve here.
+      for (let i = 0; i < 10; i++) {
+        const snap = await graph.getState(config);
+        if (!snap.next.includes("human_approval")) break;
+        this.push("  [hitl] proposal graph auto-approved");
+        await drive(null);
+      }
+    } finally {
+      clearInterval(heartbeat);
     }
-    const s = run.finalState;
-    this.push(...s.trace.map((l) => `  ${l}`));
+
+    const s = (await graph.getState(config)).values as AgentStateType;
     if (s.finalOutput) this.push("", s.finalOutput);
     this.push(`done: coverage ${s.currentTestCoverage}%/${s.targetTestCoverage}% (${s.selectedPath})`);
     const { saveRun } = await import("../store/memory.js");

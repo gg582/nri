@@ -48,6 +48,11 @@ export interface GraphDeps {
 export interface BuildGraphOptions {
   /** Extra nodes to interrupt before (in addition to human_approval). */
   interruptBefore?: string[];
+  /** Liveness hooks fired around every node execution (UI progress display). */
+  hooks?: {
+    onNodeStart?: (node: string) => void;
+    onNodeEnd?: (node: string) => void;
+  };
 }
 
 export function buildGraph(deps: GraphDeps, opts?: BuildGraphOptions) {
@@ -56,20 +61,35 @@ export function buildGraph(deps: GraphDeps, opts?: BuildGraphOptions) {
     provider: deps.resolveProvider(node),
     testRunner,
   });
+  type NodeFn = (state: AgentStateType) => Promise<Partial<AgentStateType>>;
+  const wrap = (name: string, fn: NodeFn): NodeFn => {
+    if (!opts?.hooks) return fn;
+    return async (state) => {
+      opts.hooks!.onNodeStart?.(name);
+      try {
+        return await fn(state);
+      } finally {
+        opts.hooks!.onNodeEnd?.(name);
+      }
+    };
+  };
   const graph = new StateGraph(AgentState)
-    .addNode("normalize", makeNormalizeNode(forNode("normalize")))
-    .addNode("triage", makeTriageNode(forNode("triage")))
-    .addNode("business_context", makeBusinessContextNode(forNode("business_context")))
-    .addNode("fast_patch", makeFastPatchNode(forNode("fast_patch")))
-    .addNode("decompose", makeDecomposeNode(forNode("decompose")))
-    .addNode("abstract_graph", makeAbstractGraphNode(forNode("abstract_graph")))
-    .addNode("proposal", makeProposalNode(forNode("proposal")))
-    .addNode("human_approval", async () => ({ trace: ["[hitl] proposal graph approved"] }))
-    .addNode("pre_flight", makePreFlightNode(forNode("pre_flight")))
-    .addNode("implement", makeImplementNode(forNode("implement")))
-    .addNode("evaluate", makeEvaluationNode(forNode("evaluate")))
-    .addNode("test_runner", makeTestRunnerNode(forNode("test_writer")))
-    .addNode("finalize", makeFinalizeNode(forNode("finalize")))
+    .addNode("normalize", wrap("normalize", makeNormalizeNode(forNode("normalize"))))
+    .addNode("triage", wrap("triage", makeTriageNode(forNode("triage"))))
+    .addNode("business_context", wrap("business_context", makeBusinessContextNode(forNode("business_context"))))
+    .addNode("fast_patch", wrap("fast_patch", makeFastPatchNode(forNode("fast_patch"))))
+    .addNode("decompose", wrap("decompose", makeDecomposeNode(forNode("decompose"))))
+    .addNode("abstract_graph", wrap("abstract_graph", makeAbstractGraphNode(forNode("abstract_graph"))))
+    .addNode("proposal", wrap("proposal", makeProposalNode(forNode("proposal"))))
+    .addNode(
+      "human_approval",
+      wrap("human_approval", async () => ({ trace: ["[hitl] proposal graph approved"] })),
+    )
+    .addNode("pre_flight", wrap("pre_flight", makePreFlightNode(forNode("pre_flight"))))
+    .addNode("implement", wrap("implement", makeImplementNode(forNode("implement"))))
+    .addNode("evaluate", wrap("evaluate", makeEvaluationNode(forNode("evaluate"))))
+    .addNode("test_runner", wrap("test_runner", makeTestRunnerNode(forNode("test_writer"))))
+    .addNode("finalize", wrap("finalize", makeFinalizeNode(forNode("finalize"))))
     .addEdge(START, "normalize")
     .addEdge("normalize", "triage")
     .addEdge("triage", "business_context")

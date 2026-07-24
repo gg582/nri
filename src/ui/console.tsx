@@ -67,7 +67,7 @@ function Header({ provider, model }: { provider: string; model: string }) {
   );
 }
 
-function StatusLine({ busy, scrolled }: { busy: boolean; scrolled: boolean }) {
+function StatusLine({ busy, below }: { busy: boolean; below: number }) {
   const { stdout } = useStdout();
   const width = Math.min(stdout?.columns ?? 80, 100);
   const mode = loadConfig().permissions?.mode ?? "auto";
@@ -81,7 +81,7 @@ function StatusLine({ busy, scrolled }: { busy: boolean; scrolled: boolean }) {
         <Text color={theme.dim}> │ mode </Text>
         <Text color={theme.value}>{mode}</Text>
         <Text color={theme.dim}> │ /help · /exit</Text>
-        {scrolled ? <Text color={theme.value}> │ ↑ scrolled — PgDn to follow</Text> : null}
+        {below > 0 ? <Text color={theme.value}> │ ↑ {below} below — PgDn follow · ^↓ bottom</Text> : null}
       </Text>
     </Box>
   );
@@ -114,11 +114,16 @@ export function Console({ initialRequest }: { initialRequest?: string }) {
   const maxAnchor = Math.max(0, rows.length - viewRows);
   const first = anchor === null ? maxAnchor : Math.min(anchor, maxAnchor);
   const visible = rows.slice(first, first + viewRows);
+  const below = Math.max(0, rows.length - (first + viewRows));
 
-  // In-app scrolling: ↑/↓ line-wise, PgUp/PgDn page-wise. Scrolling all the
-  // way back down re-pins the view to the bottom.
+  // In-app scrolling: ↑/↓ line-wise, PgUp/PgDn page-wise, ^↑ top, ^↓ bottom.
+  // Scrolling all the way back down re-pins the view to the bottom.
   useInput((_input, key) => {
-    if (key.pageUp || key.upArrow) {
+    if (key.ctrl && key.upArrow) {
+      setAnchor(0);
+    } else if (key.ctrl && key.downArrow) {
+      setAnchor(null);
+    } else if (key.pageUp || key.upArrow) {
       const delta = key.pageUp ? viewRows : 1;
       setAnchor((a) => Math.max(0, (a ?? maxAnchor) - delta));
     } else if (key.pageDown || key.downArrow) {
@@ -141,6 +146,8 @@ export function Console({ initialRequest }: { initialRequest?: string }) {
 
   async function onSubmit(text: string): Promise<void> {
     setInput("");
+    // A new submission re-pins the view so its output is always visible.
+    setAnchor(null);
     setBusy(true);
     try {
       await repl.submit(text);
@@ -168,7 +175,7 @@ export function Console({ initialRequest }: { initialRequest?: string }) {
           </Text>
         ))}
       </Box>
-      <StatusLine busy={busy} scrolled={anchor !== null} />
+      <StatusLine busy={busy} below={below} />
       {/* input: kimi-code style rounded card */}
       <Box borderStyle="round" borderColor={busy ? theme.dim : theme.control} paddingX={1}>
         <Text color={theme.prompt}>{busy ? "… " : "❯ "}</Text>

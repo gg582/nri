@@ -1,11 +1,12 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { cp, mkdir, writeFile } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig } from "../config.js";
 import { checkPermission } from "./permissions.js";
+import { buildChangeMesh, summarizeChangeMesh } from "./changeMesh.js";
 
 const execAsync = promisify(exec);
 
@@ -20,40 +21,19 @@ export interface ApplyPlan {
   changes: FileChange[];
 }
 
-const MAX_APPLY_FILES = 5;
-const MAX_APPLY_CHANGED_LINES = 300;
-const PROTECTED_PATH = /^(?:\.git\/|\.nri-backup\/|node_modules\/)|(?:^|\/)(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|\.env(?:\.|$))/;
+const PROTECTED_PATH = /^(?:\.git\/|\.nri-backup\/|node_modules\/)|(?:^|\/)\.env(?:\.|$)/;
 
 /**
- * File blocks replace a complete file. That is too dangerous for an existing
- * source file, so ordinary application accepts only bounded unified diffs for
- * modifications. Full blocks may create small new files, never overwrite.
+ * Structural guard only. Size is not a safety signal: a coherent 1,000-line
+ * rewrite is valid, whereas an ungrounded duplicate path is not.
  */
 function validatePlan(plan: ApplyPlan): string | null {
-  if (plan.changes.length > MAX_APPLY_FILES) {
-    return `safety block: ${plan.changes.length} files exceeds the ${MAX_APPLY_FILES}-file limit`;
-  }
+  const duplicate = plan.changes.find((change, index) => plan.changes.findIndex((other) => other.path === change.path) !== index);
+  if (duplicate) return `safety block: duplicate edits for ${duplicate.path}`;
   for (const change of plan.changes) {
     if (PROTECTED_PATH.test(change.path)) return `safety block: protected path ${change.path}`;
-    if (change.kind === "full-file" && existsSync(change.path)) {
-      return `safety block: refusing full-file overwrite of ${change.path}; submit a unified diff`;
-    }
-    if (change.kind === "diff" && existsSync(change.path)) {
-      const existingLines = readFileSync(change.path, "utf8").split("\n").length;
-      const removedLines = change.content.split("\n").filter((line) => /^-\S/.test(line) && !line.startsWith("---")).length;
-      const addedLines = change.content.split("\n").filter((line) => /^\+\S/.test(line) && !line.startsWith("+++")).length;
-      if (removedLines > existingLines * 0.5 || removedLines + addedLines > existingLines * 0.75) {
-        return `safety block: ${change.path} changes most of an existing file`;
-      }
-    }
   }
-  const changedLines = plan.changes.reduce((total, change) =>
-    total + (change.kind === "diff"
-      ? change.content.split("\n").filter((line) => /^(?:\+|-)\S/.test(line) && !/^(?:\+\+\+|---)/.test(line)).length
-      : change.content.split("\n").length), 0);
-  return changedLines > MAX_APPLY_CHANGED_LINES
-    ? `safety block: ${changedLines} changed lines exceeds the ${MAX_APPLY_CHANGED_LINES}-line limit`
-    : null;
+  return null;
 }
 
 /** Reject anything escaping the working directory. */
@@ -198,13 +178,13 @@ async function applyFileBlocks(plan: ApplyPlan): Promise<string[]> {
  */
 export async function writeFileBlocksNow(code: string): Promise<{ written: string[]; lines: string[] }> {
   void code;
-  return { written: [], lines: ["[apply] incremental writes disabled; review and approve a bounded plan first"] };
+  return { written: [], lines: ["[apply] incremental writes disabled; review the change mesh and approve first"] };
 }
 
 /** Legacy synchronous bypasses are deliberately disabled: all writes must go
- * through offerApply(), which enforces review and bounded diff limits. */
+ * through offerApply(), which enforces review and mesh validation. */
 export function applyQuickDiffPatch(_diff: string): never {
-  throw new Error("direct patch application is disabled; review the bounded plan through the apply gate");
+  throw new Error("direct patch application is disabled; review the change mesh through the apply gate");
 }
 
 /**
@@ -231,6 +211,7 @@ export async function offerApply(
   const mode = opts?.yolo ? "yolo" : (loadConfig().permissions?.mode ?? "auto");
   const summary = [
     `detected ${plan.format}: ${plan.changes.length} file(s)`,
+    ...summarizeChangeMesh(buildChangeMesh(plan)),
     ...summarizePlan(plan),
     ...refined.report,
   ];

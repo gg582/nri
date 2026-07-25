@@ -153,6 +153,13 @@ export const AgentState = Annotation.Root({
 
   /** Last verification output, fed back into the next patch attempt. */
   lastTestOutput: replace<string>(),
+
+  /** Hashes of generated candidates in this run. Repeating a candidate after
+   * a failed verification is a no-progress loop and must terminate safely. */
+  implementationFingerprints: Annotation<string[]>({
+    reducer: (a, b) => [...a, ...b],
+    default: () => [],
+  }),
 });
 
 export type AgentStateType = typeof AgentState.State;

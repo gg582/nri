@@ -34,6 +34,11 @@ Apply a minimal, targeted fix. Do NOT restructure. Do NOT add speculative featur
 Also remove any unexplained or redundant code introduced by the patch.
 Never create a duplicate copy of a file under a different directory (e.g. both
 src/foo.cpp and MyApp/src/foo.cpp) — modify the existing file at its path.
+Safety contract: decompose the work by exact existing path and language before
+writing. A complete rewrite of one identified file is allowed when needed; do
+not create parallel copies, guessed paths/imports/APIs, or ungrounded files.
+If the supplied layout does not identify the target, return an empty code string
+and explain why.
 
 Format the code as file blocks: concatenate every file you produce, each
 starting with a comment line holding its repo-relative path, e.g.
@@ -127,6 +132,11 @@ Fill in the detailed implementation by traversing the abstract graph's primal no
 3. Respect each primal node's input/output contract exactly.
 4. When existing project files are listed, modify them at their exact paths —
    never create a duplicate copy of a file under a different directory.
+Safety contract: preserve unrelated exports and behavior. First decompose by
+identified path and language, then produce only the required dependency stages.
+Large coherent rewrites are allowed; guessed imports, paths, dependencies, and
+parallel copies of modules are not. Return no code when the target cannot be
+grounded in the listed workspace layout.
 
 Format the code as file blocks: concatenate every file you produce, each
 starting with a comment line holding its repo-relative path, e.g.

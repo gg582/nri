@@ -1,6 +1,7 @@
 import type { LLMProviderStrategy, ChatMessage } from "../providers/base.js";
 import { extractJson } from "../providers/base.js";
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import type { TestRunner } from "../tools/testRunner.js";
 import { existingProjectFiles } from "../tools/layout.js";
 import { IncrementalFileParser, type StreamedFile } from "../tools/streamApply.js";
@@ -57,6 +58,8 @@ const conversationContextBlock = (s: State) =>
   s.conversationContext
     ? `\n\nCompressed conversation graph (preserve follow-up constraints; do not redo completed work):\n${s.conversationContext}`
     : "";
+
+const fingerprint = (code: string) => createHash("sha256").update(code).digest("hex").slice(0, 16);
 
 /**
  * Anchor the model to the layout already on disk (session-written files plus
@@ -199,6 +202,7 @@ export function makeFastPatchNode({ provider, emit }: NodeDeps) {
       timeComplexity: impl.time_complexity,
       spaceComplexity: impl.space_complexity,
       preFlight: null,
+      implementationFingerprints: [fingerprint(impl.code)],
       appliedFiles: applied.written,
       trace: [`[fast-patch] applied (${impl.notes})`, ...applied.lines],
     };
@@ -346,6 +350,7 @@ export function makeImplementNode({ provider, emit }: NodeDeps) {
       generatedCode: impl.code,
       timeComplexity: impl.time_complexity,
       spaceComplexity: impl.space_complexity,
+      implementationFingerprints: [fingerprint(impl.code)],
       appliedFiles: applied.written,
       trace: [`[implement] time=${impl.time_complexity} space=${impl.space_complexity}`, ...applied.lines],
     };
@@ -585,6 +590,9 @@ export function routeAfterTests(
   // No way to measure progress (missing toolchain/language) — re-patching
   // blind only wastes iterations; finalize with what we have.
   if (state.testUnevaluable) return "finalize";
+  const fingerprints = state.implementationFingerprints ?? [];
+  const latest = fingerprints.at(-1);
+  if (latest && fingerprints.slice(0, -1).includes(latest)) return "finalize";
   if (state.iterationCount >= state.maxIterations) return "finalize";
   return state.selectedPath === "FAST_PATH" ? "fast_patch" : "decompose";
 }

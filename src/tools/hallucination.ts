@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import type { ApplyPlan, FileChange } from "./apply.js";
 
 /**
@@ -95,5 +95,32 @@ function flagChange(change: FileChange, deps: Set<string>): string[] {
 /** Run all deterministic checks over a plan. */
 export function flagHallucinations(plan: ApplyPlan): string[] {
   const deps = packageDeps();
-  return plan.changes.flatMap((c) => flagChange(c, deps));
+  const flags = plan.changes.flatMap((c) => flagChange(c, deps));
+  for (const change of plan.changes) {
+    if (change.kind === "full-file" && !existsSync(change.path)) {
+      const name = basename(change.path);
+      const duplicate = plan.changes.find((other) => other.path !== change.path && basename(other.path) === name) ??
+        findExistingByBasename(name);
+      if (duplicate) flags.push(`${change.path}: possible duplicate of existing file ${typeof duplicate === "string" ? duplicate : duplicate.path}`);
+    }
+  }
+  return flags;
+}
+
+/** Bounded search for a same-named source file. Creating src/foo.ts beside an
+ * existing app/foo.ts is a common model hallucination. */
+function findExistingByBasename(name: string, root = process.cwd(), depth = 0): string | null {
+  if (depth > 4) return null;
+  let entries: Dirent[];
+  try { entries = readdirSync(root, { withFileTypes: true }); } catch { return null; }
+  for (const entry of entries) {
+    if (entry.name === ".git" || entry.name === "node_modules" || entry.name === ".nri-backup") continue;
+    const path = join(root, entry.name);
+    if (entry.isFile() && entry.name === name) return path;
+    if (entry.isDirectory()) {
+      const found = findExistingByBasename(name, path, depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
 }

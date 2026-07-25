@@ -35,6 +35,7 @@ export const HELP_LINES = [
   "  /compact <state.json> [--out p]  fold run context into a summary",
   "  /graph-compact <state.json>      compact, preserving graph node ids/edges",
   "  /memory list|search|ingest|stats|backend <jsonl|rag>",
+  "  /context show|clear                inspect or reset the current conversation graph",
   "  /help                            this text",
   "  /exit                            quit (also: /quit)",
   "keys: ↑/↓·PgUp/PgDn scroll log · ^↑/^↓ top/bottom · ←/→ browse prompt history (Enter re-submits)",
@@ -335,6 +336,16 @@ export class Repl {
       case "memory": {
         const { memoryCommand } = await import("../commands/memory.js");
         this.push(...(await capture(() => memoryCommand(rest))));
+        return;
+      }
+      case "context": {
+        if (rest[0] === "clear") {
+          this.conversationTurns.length = 0;
+          this.push("conversation context cleared.");
+        } else {
+          const context = this.conversationContext();
+          this.push(context ? `conversation graph:\n${context}` : "conversation context is empty.");
+        }
         return;
       }
       default:

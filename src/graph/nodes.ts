@@ -176,6 +176,9 @@ export function makeAbstractGraphNode({ provider }: NodeDeps) {
 
 export function makeProposalNode({ provider }: NodeDeps) {
   return async (state: State): Promise<Update> => {
+    const feedback = state.preFlight?.violation_reason
+      ? `\n\nPrevious plan was rejected by pre-flight audit: ${state.preFlight.violation_reason}\nAddress this in the new proposals.`
+      : "";
     const proposals = await provider.invokeJson(
       [
         { role: "system", content: PROPOSAL_SYSTEM },
@@ -184,7 +187,8 @@ export function makeProposalNode({ provider }: NodeDeps) {
           content:
             `Abstract graph:\n${JSON.stringify(state.abstractGraph, null, 2)}` +
             `\n\nTask tree:\n${JSON.stringify(state.taskTree, null, 2)}` +
-            businessContextBlock(state),
+            businessContextBlock(state) +
+            feedback,
         },
       ],
       ProposalGraphSchema,
@@ -218,12 +222,28 @@ export function makePreFlightNode({ provider }: NodeDeps) {
       ],
       PreFlightResultSchema,
     );
+    if (result.is_business_valid) {
+      return {
+        preFlight: result,
+        preFlightAttempts: state.preFlightAttempts + 1,
+        trace: ["[pre-flight] valid=true"],
+      };
+    }
+    // Rejection means the request was underspecified: subdivide it ourselves
+    // by folding the violation into the request, so the re-plan addresses it
+    // instead of repeating the same plan. Incomplete termination is reserved
+    // for genuine exhaustion (attempt guardrail in routeAfterPreFlight).
+    const refinedRequest =
+      `${state.currentRequest}\n\n` +
+      `Additional requirements identified during plan review (must be addressed): ` +
+      (result.violation_reason ?? "plan did not satisfy the declared business context");
     return {
       preFlight: result,
       preFlightAttempts: state.preFlightAttempts + 1,
+      currentRequest: refinedRequest,
       trace: [
-        `[pre-flight] valid=${result.is_business_valid}` +
-          (result.violation_reason ? ` — ${result.violation_reason}` : ""),
+        `[pre-flight] valid=false — ${result.violation_reason ?? "unspecified violation"}`,
+        "[pre-flight] request refined with the missing requirements; re-planning",
       ],
     };
   };
@@ -377,12 +397,14 @@ export function routeAfterTriage(state: State): "fast_patch" | "decompose" {
  */
 export function routeAfterPreFlight(
   state: State,
-): "fast_patch" | "test_runner" | "implement" | "proposal" | "__end__" {
+): "fast_patch" | "test_runner" | "implement" | "decompose" | "__end__" {
   if (state.preFlight?.is_business_valid) {
     return state.selectedPath === "FAST_PATH" ? "test_runner" : "implement";
   }
   if (state.preFlightAttempts >= 3) return "__end__";
-  return state.selectedPath === "FAST_PATH" ? "fast_patch" : "proposal";
+  // HEAVY: re-subdivide from the refined request (pre_flight folded the
+  // violation into currentRequest) instead of re-proposing blindly.
+  return state.selectedPath === "FAST_PATH" ? "fast_patch" : "decompose";
 }
 
 export function routeAfterTests(state: State): "fast_patch" | "decompose" | "finalize" {

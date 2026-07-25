@@ -111,6 +111,56 @@ export function modelSet(target?: string, specs: string[] = []): void {
   stdout.write(`routing: ${target} -> ${formatSpec(value)}\n`);
 }
 
+/** Current ordered trial pool for a routing target ("default" or a node name). */
+export function modelOrder(target = "default"): string[] {
+  const routing = loadConfig().routing ?? {};
+  const value = target === "default" ? routing.default : routing.nodes?.[target];
+  return value ? (Array.isArray(value) ? value : [value]) : [];
+}
+
+/** Persist a reordered pool (same specs, new order). */
+export function modelReorderSave(target: string, specs: string[]): void {
+  const value: string | string[] = specs.length === 1 ? specs[0] : specs;
+  const routing = loadConfig().routing ?? {};
+  if (target === "default") {
+    saveGlobalConfig({ routing: { ...routing, default: value } });
+  } else {
+    saveGlobalConfig({ routing: { ...routing, nodes: { ...routing.nodes, [target]: value } } });
+  }
+  stdout.write(`routing: ${target} -> ${formatSpec(value)}\n`);
+}
+
+/** Parse "2 1 3" into a reordered spec array; null unless an exact permutation. */
+export function parsePermutation(answer: string, specs: string[]): string[] | null {
+  const idx = answer.split(/[\s,]+/).filter(Boolean).map((s) => Number(s) - 1);
+  if (idx.length !== specs.length) return null;
+  if ([...idx].sort((a, b) => a - b).some((v, i) => v !== i)) return null;
+  return idx.map((i) => specs[i]);
+}
+
+/** Interactive reorder (CLI): show the pool, take a permutation like "2 1 3". */
+export async function modelReorder(target = "default"): Promise<void> {
+  const specs = modelOrder(target);
+  if (specs.length === 0) {
+    stdout.write(`no pool configured for "${target}" — use \`nri model set\` or \`nri model assign\` first.\n`);
+    return;
+  }
+  stdout.write(`current fallback order for ${target}:\n`);
+  specs.forEach((s, i) => stdout.write(`  ${i + 1}. ${s}\n`));
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    const answer = await rl.question("new order (e.g. 2 1 3): ");
+    const next = parsePermutation(answer, specs);
+    if (!next) {
+      stdout.write("invalid permutation — aborted.\n");
+      return;
+    }
+    modelReorderSave(target, next);
+  } finally {
+    rl.close();
+  }
+}
+
 export async function modelAssign(): Promise<void> {
   const all = getCandidates();
   if (all.length === 0) {
@@ -162,12 +212,16 @@ export async function modelCommand(args: string[]): Promise<void> {
     case "assign":
       await modelAssign();
       return;
+    case "reorder":
+    case "order":
+      await modelReorder(rest[0]);
+      return;
     case "candidates": {
       for (const c of getCandidates()) stdout.write(`${c.spec} [${c.tier}]\n`);
       return;
     }
     default:
-      throw new Error(`unknown model subcommand "${sub}" (list|set|assign|candidates)`);
+      throw new Error(`unknown model subcommand "${sub}" (list|set|assign|reorder|candidates)`);
   }
 }
 

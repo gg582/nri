@@ -106,7 +106,7 @@ export function buildGraph(deps: GraphDeps, opts?: BuildGraphOptions) {
       fast_patch: "fast_patch",
       test_runner: "test_runner",
       implement: "implement",
-      proposal: "proposal",
+      decompose: "decompose",
       __end__: END,
     })
     .addEdge("implement", "evaluate")

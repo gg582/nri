@@ -88,7 +88,7 @@ Usage:
   nri --cli -r "<task>" [options]   one-shot CLI run (explicit opt-in)
   nri help                          this reference
   nri provider <list|import|add|remove|refresh>   manage providers (also: /provider)
-  nri model <list|assign|set|candidates>  per-node model routing (also: /model)
+  nri model <list|assign|set|reorder|candidates>  per-node model routing (also: /model)
   nri permission <list|set-mode|allow|deny|clear>   execution policy (also: /permission)
   nri yolo [off]                          toggle yolo permission mode (also: /yolo)
   nri plan "<request>"                    read-only planning run (also: /plan)
@@ -121,6 +121,7 @@ Commands:
   nri model list                          current per-node routing table
   nri model assign                        multi-select models, auto-assign per node capability
   nri model set <node|default> <provider:model> [more models...]   ordered trial pool
+  nri model reorder [node|default]          edit fallback order interactively
   nri model candidates                    list selectable provider:model specs
 
 Environment:

@@ -21,7 +21,16 @@ export interface UiRunOptions {
  * Returns the process exit code: 0 = coverage target met, 2 = rejected, 3 = missed.
  */
 export async function runWithUi(opts: UiRunOptions): Promise<number> {
-  const resolver = makeProviderResolver({ provider: opts.provider, model: opts.model });
+  // onFallback fires only once the graph runs, after state/rerender exist.
+  const resolver = makeProviderResolver(
+    { provider: opts.provider, model: opts.model },
+    {
+      onFallback: (m) => {
+        state.trace = [...state.trace, `[warn] ${m}`];
+        rerender();
+      },
+    },
+  );
   const head = resolver("triage");
   const threadId = `nri-ui-${Date.now()}`;
   const config = { configurable: { thread_id: threadId } };

@@ -15,11 +15,13 @@ import { createProvider, parseModelSpec } from "./factory.js";
 export class TrialStrategy extends BaseProviderStrategy {
   private readonly strategies: LLMProviderStrategy[];
   private readonly benched = new Set<number>();
+  private readonly onFallback?: (message: string) => void;
 
-  constructor(strategies: LLMProviderStrategy[]) {
+  constructor(strategies: LLMProviderStrategy[], opts?: { onFallback?: (message: string) => void }) {
     super();
     if (strategies.length === 0) throw new Error("TrialStrategy needs at least one strategy");
     this.strategies = strategies;
+    this.onFallback = opts?.onFallback;
   }
 
   private get active(): LLMProviderStrategy {
@@ -59,11 +61,13 @@ export class TrialStrategy extends BaseProviderStrategy {
         } catch {
           /* keep generic label */
         }
-        // console.error (not stderr.write) so the ink UI can render the notice.
-        console.error(
+        // Route through the UI hook when present (keeps the notice inline in
+        // the console's log flow); otherwise console.error so ink can render it.
+        const message =
           `nri: ${label} failed (${err instanceof Error ? err.message : String(err)}) ` +
-            "— trying next model in pool",
-        );
+          "— trying next model in pool";
+        if (this.onFallback) this.onFallback(message);
+        else console.error(message);
       }
     }
     throw lastError;
@@ -85,7 +89,7 @@ export class TrialStrategy extends BaseProviderStrategy {
 export function makeProviderResolver(cli?: {
   provider?: string;
   model?: string;
-}): (node: string) => LLMProviderStrategy {
+}, hooks?: { onFallback?: (message: string) => void }): (node: string) => LLMProviderStrategy {
   const config = loadConfig();
   const cache = new Map<string, LLMProviderStrategy>();
   const build = (spec: string): LLMProviderStrategy => {
@@ -107,7 +111,7 @@ export function makeProviderResolver(cli?: {
         strategy =
           pool.length === 1
             ? build(pool[0])
-            : new TrialStrategy(lazyAll(pool, build));
+            : new TrialStrategy(lazyAll(pool, build), hooks);
       }
       cache.set(key, strategy);
     }

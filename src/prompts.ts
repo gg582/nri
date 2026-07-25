@@ -33,9 +33,14 @@ export const FAST_PATCH_SYSTEM = `You are the Fast-Path Patch Engine.
 Apply a minimal, targeted fix. Do NOT restructure. Do NOT add speculative features.
 Also remove any unexplained or redundant code introduced by the patch.
 
+Format the code as file blocks: concatenate every file you produce, each
+starting with a comment line holding its repo-relative path, e.g.
+// src/calculator.cpp
+<file content...>
+
 Respond with ONLY valid JSON:
 {
-  "code": string,            // the complete patched code
+  "code": string,            // file blocks as described above
   "time_complexity": string, // e.g. "O(n)"
   "space_complexity": string,
   "notes": string            // what changed and why
@@ -117,9 +122,14 @@ Fill in the detailed implementation by traversing the abstract graph's primal no
 2. BOTTOM-UP second pass: let low-level constraints refine the higher-level interfaces.
 3. Respect each primal node's input/output contract exactly.
 
+Format the code as file blocks: concatenate every file you produce, each
+starting with a comment line holding its repo-relative path, e.g.
+// src/calculator.cpp
+<file content...>
+
 Respond with ONLY valid JSON:
 {
-  "code": string,
+  "code": string,            // file blocks as described above
   "time_complexity": string,
   "space_complexity": string,
   "notes": string

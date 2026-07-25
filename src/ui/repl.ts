@@ -22,7 +22,7 @@ export async function capture(fn: () => Promise<void> | void): Promise<string[]>
 export const HELP_LINES = [
   "slash commands (mirrors of the CLI subcommands):",
   "  /provider list|import [kimi-code|codex]|add [n]|remove <n>|refresh [n]",
-  "  /model list|assign|set <node|default> <provider:model> [more...]|candidates",
+  "  /model list|assign|set <node|default> <provider:model> [more...]|reorder [node]|candidates",
   "  /permission list|set-mode <plan|auto|yolo>|allow <re>|deny <re>|clear <allow|deny>",
   "  /yolo [off]                       toggle yolo mode (gates off, advisory only)",
   "  /plan <request>                 read-only plan, nothing executed",
@@ -42,7 +42,8 @@ export const HELP_LINES = [
 
 type Wizard =
   | { kind: "provider-add"; step: number; data: { name?: string; apiKey?: string; baseURL?: string; defaultModel?: string } }
-  | { kind: "model-assign"; step: number; data: { picked?: string[]; nodes?: Record<string, string[]> } };
+  | { kind: "model-assign"; step: number; data: { picked?: string[]; nodes?: Record<string, string[]> } }
+  | { kind: "model-reorder"; step: number; data: { target?: string; specs?: string[] } };
 
 const PROVIDER_ADD_STEPS = ["provider name", "api key (empty = env)", "base url (optional)", "default model (optional)"];
 
@@ -69,7 +70,10 @@ export class Repl {
   }
 
   private async runRequest(request: string): Promise<void> {
-    const resolver = makeProviderResolver({});
+    const resolver = makeProviderResolver(
+      {},
+      { onFallback: (m) => this.push(`  [warn] ${m}`) },
+    );
     // Liveness: node-start lines + a heartbeat while a node runs long, so a
     // slow LLM call never looks like a hang.
     let runningNode: string | null = null;
@@ -132,7 +136,20 @@ export class Repl {
     }
 
     const s = (await graph.getState(config)).values as AgentStateType;
-    if (s.finalOutput) this.push("", s.finalOutput);
+    if (s.finalOutput) {
+      this.push("", s.finalOutput);
+    } else {
+      // The graph can end before finalize (pre-flight attempts exhausted) —
+      // say so plainly instead of printing a bare "done" line.
+      const reason =
+        s.preFlight && !s.preFlight.is_business_valid
+          ? `pre-flight rejected the plan after ${s.preFlightAttempts} attempt(s) — ` +
+            (s.preFlight.violation_reason ?? "no reason given")
+          : s.iterationCount >= s.maxIterations
+            ? `iteration limit reached (${s.iterationCount}/${s.maxIterations})`
+            : "pipeline ended before finalize";
+      this.push(`run ended without completing: ${reason}`);
+    }
     this.push(`done: coverage ${s.currentTestCoverage}%/${s.targetTestCoverage}% (${s.selectedPath})`);
     const { saveRun } = await import("../store/memory.js");
     await saveRun({
@@ -175,6 +192,22 @@ export class Repl {
           const all = getCandidates();
           this.push("available models:", ...all.map((c, i) => `  ${i + 1}. ${c.spec}  [${c.tier}]`), "selection (e.g. 1,3,4):");
           this.wizard = { kind: "model-assign", step: 0, data: {} };
+          return;
+        }
+        if (rest[0] === "reorder" || rest[0] === "order") {
+          const { modelOrder } = await import("../commands/model.js");
+          const target = rest[1] ?? "default";
+          const specs = modelOrder(target);
+          if (specs.length === 0) {
+            this.push(`no pool configured for "${target}" — use /model set or /model assign first.`);
+            return;
+          }
+          this.push(
+            `current fallback order for ${target}:`,
+            ...specs.map((s, i) => `  ${i + 1}. ${s}`),
+            "new order (e.g. 2 1 3):",
+          );
+          this.wizard = { kind: "model-reorder", step: 0, data: { target, specs } };
           return;
         }
         const { modelCommand } = await import("../commands/model.js");
@@ -240,6 +273,18 @@ export class Repl {
       }
       const { providerAdd } = await import("../commands/provider.js");
       this.push(...(await capture(() => providerAdd(data.name, data))));
+      this.wizard = null;
+      return;
+    }
+    // model-reorder
+    if (w.kind === "model-reorder") {
+      const { parsePermutation, modelReorderSave } = await import("../commands/model.js");
+      const next = parsePermutation(text, w.data.specs!);
+      if (!next) {
+        this.push("invalid permutation — cancelled.");
+      } else {
+        this.push(...(await capture(() => Promise.resolve(modelReorderSave(w.data.target ?? "default", next)))));
+      }
       this.wizard = null;
       return;
     }

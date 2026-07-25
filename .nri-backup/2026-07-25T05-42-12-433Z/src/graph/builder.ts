@@ -23,14 +23,6 @@ import {
   routeAfterVisual,
   type NodeDeps,
 } from "./nodes.js";
-import type { ParsedChangeRequest, DetectedSimpleChange, TaskGroup as SimpleTaskGroup, SimplicityScores, ExecutionPath, ExecutionResult, CommitResult } from "./nodes.js";
-import { ingest } from "../tools/ingest.js";
-import { detect } from "../tools/detect.js";
-import { plan as planSimpleChange } from "../tools/plan.js";
-import { score } from "../tools/score.js";
-import { decide } from "../tools/decide.js";
-import { execute } from "../tools/execute.js";
-import { finalize } from "../tools/finalize.js";
 
 /**
  * Graph-level dependencies: a per-node provider resolver plus the test runner.
@@ -200,19 +192,4 @@ export async function resumeNri(
   await graph.invoke(null, config);
   const snapshot = await graph.getState(config);
   return snapshot.values as AgentStateType;
-}
-
-/** Isolated deterministic workflow retained for narrowly-scoped maintenance work. */
-export function buildSimpleChangeBypassGraph(): { run(rawRequest: string): Promise<{ commitHash: string; pushed: boolean }> } {
-  return { async run(rawRequest) {
-    const parsed: ParsedChangeRequest = await ingest(rawRequest);
-    const detected: DetectedSimpleChange = detect(parsed);
-    const taskGroup: SimpleTaskGroup = planSimpleChange(parsed, detected);
-    const scores: SimplicityScores = score(taskGroup);
-    const path: ExecutionPath = decide(detected, scores);
-    const result: ExecutionResult = await execute(taskGroup, path);
-    if (!result.success) throw new Error(`Simple change was not applied: ${result.errors.join(", ")}`);
-    const commit: CommitResult = await finalize(result, parsed);
-    return { commitHash: commit.commitHash, pushed: commit.pushed };
-  }};
 }

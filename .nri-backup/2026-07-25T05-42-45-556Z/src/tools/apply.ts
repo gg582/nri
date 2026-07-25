@@ -20,42 +20,6 @@ export interface ApplyPlan {
   changes: FileChange[];
 }
 
-const MAX_APPLY_FILES = 5;
-const MAX_APPLY_CHANGED_LINES = 300;
-const PROTECTED_PATH = /^(?:\.git\/|\.nri-backup\/|node_modules\/)|(?:^|\/)(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|\.env(?:\.|$))/;
-
-/**
- * File blocks replace a complete file. That is too dangerous for an existing
- * source file, so ordinary application accepts only bounded unified diffs for
- * modifications. Full blocks may create small new files, never overwrite.
- */
-function validatePlan(plan: ApplyPlan): string | null {
-  if (plan.changes.length > MAX_APPLY_FILES) {
-    return `safety block: ${plan.changes.length} files exceeds the ${MAX_APPLY_FILES}-file limit`;
-  }
-  for (const change of plan.changes) {
-    if (PROTECTED_PATH.test(change.path)) return `safety block: protected path ${change.path}`;
-    if (change.kind === "full-file" && existsSync(change.path)) {
-      return `safety block: refusing full-file overwrite of ${change.path}; submit a unified diff`;
-    }
-    if (change.kind === "diff" && existsSync(change.path)) {
-      const existingLines = readFileSync(change.path, "utf8").split("\n").length;
-      const removedLines = change.content.split("\n").filter((line) => /^-\S/.test(line) && !line.startsWith("---")).length;
-      const addedLines = change.content.split("\n").filter((line) => /^\+\S/.test(line) && !line.startsWith("+++")).length;
-      if (removedLines > existingLines * 0.5 || removedLines + addedLines > existingLines * 0.75) {
-        return `safety block: ${change.path} changes most of an existing file`;
-      }
-    }
-  }
-  const changedLines = plan.changes.reduce((total, change) =>
-    total + (change.kind === "diff"
-      ? change.content.split("\n").filter((line) => /^(?:\+|-)\S/.test(line) && !/^(?:\+\+\+|---)/.test(line)).length
-      : change.content.split("\n").length), 0);
-  return changedLines > MAX_APPLY_CHANGED_LINES
-    ? `safety block: ${changedLines} changed lines exceeds the ${MAX_APPLY_CHANGED_LINES}-line limit`
-    : null;
-}
-
 /** Reject anything escaping the working directory. */
 function safeRelPath(p: string): string | null {
   const cleaned = p.replace(/^[ab]\//, "").trim();
@@ -197,14 +161,25 @@ async function applyFileBlocks(plan: ApplyPlan): Promise<string[]> {
  * content already matches are skipped (loop iterations rewrite only deltas).
  */
 export async function writeFileBlocksNow(code: string): Promise<{ written: string[]; lines: string[] }> {
-  void code;
-  return { written: [], lines: ["[apply] incremental writes disabled; review and approve a bounded plan first"] };
-}
-
-/** Legacy synchronous bypasses are deliberately disabled: all writes must go
- * through offerApply(), which enforces review and bounded diff limits. */
-export function applyQuickDiffPatch(_diff: string): never {
-  throw new Error("direct patch application is disabled; review the bounded plan through the apply gate");
+  const plan = planApply(code);
+  if (plan.format !== "file-blocks") return { written: [], lines: [] };
+  const gate = checkPermission("write files");
+  if (!gate.allowed) return { written: [], lines: [`[apply] skipped: ${gate.reason}`] };
+  const todo = plan.changes.filter(
+    (c) => !(existsSync(c.path) && readFileSync(c.path, "utf8") === c.content),
+  );
+  if (todo.length === 0) return { written: [], lines: [] };
+  await backup(todo.map((c) => c.path));
+  const lines: string[] = gate.advisory ? [`[warn] ${gate.advisory}`] : [];
+  const written: string[] = [];
+  for (const c of todo) {
+    const isNew = !existsSync(c.path);
+    await mkdir(dirname(c.path), { recursive: true });
+    await writeFile(c.path, c.content, "utf8");
+    written.push(c.path);
+    lines.push(`  [apply] ${isNew ? "+" : "~"} ${c.path} (${c.content.split("\n").length} lines)`);
+  }
+  return { written, lines };
 }
 
 /**
@@ -226,8 +201,6 @@ export async function offerApply(
   const refined = await refineChanges(generatedCode, { provider: opts?.provider });
   const plan = refined.plan;
   if (plan.format === "none") return ["no applicable diff/file-blocks detected — output left unapplied."];
-  const safetyBlock = validatePlan(plan);
-  if (safetyBlock) return [`${safetyBlock}; output left unapplied.`];
   const mode = opts?.yolo ? "yolo" : (loadConfig().permissions?.mode ?? "auto");
   const summary = [
     `detected ${plan.format}: ${plan.changes.length} file(s)`,

@@ -101,8 +101,6 @@ const replace = <T>() => Annotation<T>({ reducer: (_a, b) => b, default: undefin
 export const AgentState = Annotation.Root({
   /** Untouched user input; normalize reads this, everything else uses the canonical form. */
   rawRequest: replace<string>(),
-  /** Compact graph of completed REPL turns relevant to this request. */
-  conversationContext: replace<string>(),
   originalRequest: replace<string>(),
   currentRequest: replace<string>(),
   targetTestCoverage: replace<number>(),

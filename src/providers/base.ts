@@ -30,6 +30,14 @@ export interface LLMProviderStrategy {
   invoke(messages: ChatMessage[], opts?: InvokeOptions): Promise<string>;
 
   /**
+   * Optional token streaming: yield raw text deltas as the model produces
+   * them. Consumers that only need the final string may concatenate the
+   * deltas; consumers like the implementation nodes parse file blocks out of
+   * the stream incrementally. Strategies that cannot stream simply omit it.
+   */
+  stream?(messages: ChatMessage[], opts?: InvokeOptions): AsyncIterable<string>;
+
+  /**
    * Structured JSON completion. The strategy must steer the model toward
    * schema-conformant JSON; the harness validates with zod and retries
    * through `invokeJsonWithRetry` on parse/validation failure.

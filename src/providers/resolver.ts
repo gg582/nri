@@ -44,6 +44,21 @@ export class TrialStrategy extends BaseProviderStrategy {
     }
   }
 
+  /** Notify a member failure (guarded: the member may not even construct). */
+  private notifyFailure(index: number, err: unknown): void {
+    let label = `pool member #${index + 1}`;
+    try {
+      label = `${this.strategies[index].name}/${this.strategies[index].model}`;
+    } catch {
+      /* keep generic label */
+    }
+    const message =
+      `nri: ${label} failed (${err instanceof Error ? err.message : String(err)}) ` +
+      "— trying next model in pool";
+    if (this.onFallback) this.onFallback(message);
+    else console.error(message);
+  }
+
   async invoke(messages: ChatMessage[], opts?: InvokeOptions): Promise<string> {
     let lastError: unknown = new Error("all models in the trial pool failed");
     for (let i = 0; i < this.strategies.length; i++) {
@@ -53,21 +68,33 @@ export class TrialStrategy extends BaseProviderStrategy {
       } catch (err) {
         this.benched.add(i);
         lastError = err;
-        // The failing member may not even construct (e.g. missing credentials),
-        // so reading its name/model can itself throw — guard the label.
-        let label = `pool member #${i + 1}`;
-        try {
-          label = `${this.strategies[i].name}/${this.strategies[i].model}`;
-        } catch {
-          /* keep generic label */
+        this.notifyFailure(i, err);
+      }
+    }
+    throw lastError;
+  }
+
+  async *stream(messages: ChatMessage[], opts?: InvokeOptions): AsyncIterable<string> {
+    let lastError: unknown = new Error("all models in the trial pool failed");
+    for (let i = 0; i < this.strategies.length; i++) {
+      if (this.benched.has(i)) continue;
+      const member = this.strategies[i];
+      if (!member.stream) continue;
+      let yielded = false;
+      try {
+        for await (const delta of member.stream(messages, opts)) {
+          yielded = true;
+          yield delta;
         }
-        // Route through the UI hook when present (keeps the notice inline in
-        // the console's log flow); otherwise console.error so ink can render it.
-        const message =
-          `nri: ${label} failed (${err instanceof Error ? err.message : String(err)}) ` +
-          "— trying next model in pool";
-        if (this.onFallback) this.onFallback(message);
-        else console.error(message);
+        return;
+      } catch (err) {
+        // Mid-stream failure leaves partial content downstream — no clean
+        // failover, so propagate. Pre-yield failures fall through to the
+        // next pool member as usual.
+        if (yielded) throw err;
+        this.benched.add(i);
+        lastError = err;
+        this.notifyFailure(i, err);
       }
     }
     throw lastError;

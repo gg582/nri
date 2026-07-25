@@ -76,6 +76,10 @@ export async function runWithUi(opts: UiRunOptions): Promise<number> {
           state.phase = node;
           rerender();
         },
+        onTrace: (_node, line) => {
+          state.trace = [...state.trace, line];
+          rerender();
+        },
       },
     },
   );

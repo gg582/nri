@@ -52,6 +52,8 @@ export interface BuildGraphOptions {
   hooks?: {
     onNodeStart?: (node: string) => void;
     onNodeEnd?: (node: string) => void;
+    /** Mid-node live line (e.g. streamed file writes). */
+    onTrace?: (node: string, line: string) => void;
   };
 }
 
@@ -60,6 +62,7 @@ export function buildGraph(deps: GraphDeps, opts?: BuildGraphOptions) {
   const forNode = (node: string): NodeDeps => ({
     provider: deps.resolveProvider(node),
     testRunner,
+    emit: opts?.hooks?.onTrace ? (line) => opts.hooks!.onTrace!(node, line) : undefined,
   });
   type NodeFn = (state: AgentStateType) => Promise<Partial<AgentStateType>>;
   const wrap = (name: string, fn: NodeFn): NodeFn => {

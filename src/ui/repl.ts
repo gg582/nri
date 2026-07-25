@@ -128,6 +128,9 @@ export class Repl {
           onNodeEnd: (node) => {
             if (runningNode === node) runningNode = null;
           },
+          // Live apply lines from streamed file writes — shown even with
+          // /thinking hide since they are results, not reasoning.
+          onTrace: (_node, line) => this.push(line),
         },
       },
     );

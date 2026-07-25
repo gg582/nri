@@ -54,6 +54,13 @@ abstract class NativeChatStrategy extends BaseProviderStrategy {
     const res = await this.createClient(opts).invoke(toLangChainMessages(messages));
     return contentToString(res.content);
   }
+
+  async *stream(messages: ChatMessage[], opts?: InvokeOptions): AsyncIterable<string> {
+    const s = await this.createClient(opts).stream(toLangChainMessages(messages));
+    for await (const chunk of s) {
+      yield contentToString(chunk.content);
+    }
+  }
 }
 
 /**
@@ -138,6 +145,29 @@ export class OpenAICompatibleStrategy extends BaseProviderStrategy {
       this.droppedParams.add(param);
       console.error(`nri: ${this.name}/${this.model} rejects ${param} — retrying without it`);
       return await this.invokeOnce(messages, opts);
+    }
+  }
+
+  async *stream(messages: ChatMessage[], opts?: InvokeOptions): AsyncIterable<string> {
+    let adapted = false;
+    for (;;) {
+      let yielded = false;
+      try {
+        const s = await this.createClient(opts).stream(toLangChainMessages(messages));
+        for await (const chunk of s) {
+          yielded = true;
+          yield contentToString(chunk.content);
+        }
+        return;
+      } catch (err) {
+        const param = OpenAICompatibleStrategy.rejectedParam(err);
+        // Only adapt before the first delta — retrying mid-stream would
+        // duplicate content for downstream incremental parsers.
+        if (yielded || adapted || !param || this.droppedParams.has(param)) throw err;
+        this.droppedParams.add(param);
+        adapted = true;
+        console.error(`nri: ${this.name}/${this.model} rejects ${param} — retrying without it`);
+      }
     }
   }
 }

@@ -1,11 +1,14 @@
-import type { LLMProviderStrategy } from "../providers/base.js";
+import type { LLMProviderStrategy, ChatMessage } from "../providers/base.js";
+import { extractJson } from "../providers/base.js";
 import type { TestRunner } from "../tools/testRunner.js";
 import { writeFileBlocksNow } from "../tools/apply.js";
+import { IncrementalFileParser, type StreamedFile } from "../tools/streamApply.js";
 import {
   AbstractGraphSchema,
   BusinessContextSchema,
   EvaluationResultSchema,
   ImplementationResultSchema,
+  type ImplementationResult,
   NormalizedRequestSchema,
   PreFlightResultSchema,
   ProposalGraphSchema,
@@ -31,6 +34,8 @@ import {
 export interface NodeDeps {
   provider: LLMProviderStrategy;
   testRunner: TestRunner;
+  /** Live mid-node line channel (streamed file writes); absent = trace only. */
+  emit?: (line: string) => void;
 }
 
 type State = AgentStateType;
@@ -40,6 +45,48 @@ const businessContextBlock = (s: State) =>
   s.businessContext
     ? `\n\nDeclared business context:\n${JSON.stringify(s.businessContext, null, 2)}`
     : "";
+
+/**
+ * Stream the implementation call when the provider supports it, writing each
+ * file block to disk the moment it completes. Returns null when streaming is
+ * unavailable or the streamed output fails validation — callers then fall
+ * back to invokeJson. `lines` carries apply notes only when no live `emit`
+ * channel exists (otherwise they were already pushed).
+ */
+async function streamImplementation(
+  provider: LLMProviderStrategy,
+  messages: ChatMessage[],
+  emit: ((line: string) => void) | undefined,
+): Promise<{ impl: ImplementationResult; written: string[]; lines: string[] } | null> {
+  if (!provider.stream) return null;
+  const parser = new IncrementalFileParser();
+  const written: string[] = [];
+  const lines: string[] = [];
+  const note = (line: string) => (emit ? emit(line) : lines.push(line));
+  const flush = async (files: StreamedFile[]): Promise<void> => {
+    for (const f of files) {
+      const res = await writeFileBlocksNow(`// ${f.path}\n${f.content}`);
+      written.push(...res.written);
+      for (const line of res.lines) note(line);
+    }
+  };
+  try {
+    let raw = "";
+    for await (const delta of provider.stream(messages)) {
+      raw += delta;
+      await flush(parser.feed(delta));
+    }
+    await flush(parser.finish());
+    const impl = ImplementationResultSchema.parse(JSON.parse(extractJson(raw)));
+    // Canonical pass: catches any block the incremental parser missed.
+    const res = await writeFileBlocksNow(impl.code);
+    written.push(...res.written);
+    for (const line of res.lines) note(line);
+    return { impl, written, lines };
+  } catch {
+    return null;
+  }
+}
 
 /* ---------------- Ingress: normalize raw request into controlled English ---------------- */
 
@@ -107,7 +154,7 @@ export function makeBusinessContextNode({ provider }: NodeDeps) {
 
 /* ---------------- FAST_PATH: direct patch ---------------- */
 
-export function makeFastPatchNode({ provider }: NodeDeps) {
+export function makeFastPatchNode({ provider, emit }: NodeDeps) {
   return async (state: State): Promise<Update> => {
     const feedback = state.preFlight?.violation_reason
       ? `\n\nPrevious attempt was rejected by pre-flight audit: ${state.preFlight.violation_reason}\nFix this.`
@@ -115,20 +162,19 @@ export function makeFastPatchNode({ provider }: NodeDeps) {
     const testFeedback = state.lastTestOutput
       ? `\n\nLatest test/verification output:\n${state.lastTestOutput}\nFix the errors above.`
       : "";
-    const impl = await provider.invokeJson(
-      [
-        { role: "system", content: FAST_PATCH_SYSTEM },
-        {
-          role: "user",
-          content:
-            `Request:\n${state.currentRequest}${businessContextBlock(state)}${feedback}${testFeedback}` +
-            (state.generatedCode ? `\n\nCurrent code:\n${state.generatedCode}` : ""),
-        },
-      ],
-      ImplementationResultSchema,
-    );
-    // Write produced files immediately (see implement node for rationale).
-    const applied = await writeFileBlocksNow(impl.code);
+    const messages: ChatMessage[] = [
+      { role: "system", content: FAST_PATCH_SYSTEM },
+      {
+        role: "user",
+        content:
+          `Request:\n${state.currentRequest}${businessContextBlock(state)}${feedback}${testFeedback}` +
+          (state.generatedCode ? `\n\nCurrent code:\n${state.generatedCode}` : ""),
+      },
+    ];
+    // Streamed path: files hit disk one by one as the model emits them.
+    const streamed = await streamImplementation(provider, messages, emit);
+    const impl = streamed?.impl ?? (await provider.invokeJson(messages, ImplementationResultSchema));
+    const applied = streamed ?? (await writeFileBlocksNow(impl.code));
     return {
       generatedCode: impl.code,
       timeComplexity: impl.time_complexity,
@@ -258,24 +304,24 @@ export function makePreFlightNode({ provider }: NodeDeps) {
 
 /* ---------------- HEAVY_PATH implementation (steps 8-9) ---------------- */
 
-export function makeImplementNode({ provider }: NodeDeps) {
+export function makeImplementNode({ provider, emit }: NodeDeps) {
   return async (state: State): Promise<Update> => {
-    const impl = await provider.invokeJson(
-      [
-        { role: "system", content: IMPLEMENT_SYSTEM },
-        {
-          role: "user",
-          content:
-            `Abstract graph:\n${JSON.stringify(state.abstractGraph, null, 2)}` +
-            `\n\nAdopted proposals:\n${JSON.stringify(state.proposalGraph, null, 2)}` +
-            businessContextBlock(state),
-        },
-      ],
-      ImplementationResultSchema,
-    );
-    // Write produced files immediately — later validation loops rewrite them
-    // in place, so the user watches the implementation materialize.
-    const applied = await writeFileBlocksNow(impl.code);
+    const messages: ChatMessage[] = [
+      { role: "system", content: IMPLEMENT_SYSTEM },
+      {
+        role: "user",
+        content:
+          `Abstract graph:\n${JSON.stringify(state.abstractGraph, null, 2)}` +
+          `\n\nAdopted proposals:\n${JSON.stringify(state.proposalGraph, null, 2)}` +
+          businessContextBlock(state),
+      },
+    ];
+    // Streamed path: files hit disk one by one as the model emits them —
+    // later validation loops rewrite them in place, so the user watches the
+    // implementation materialize.
+    const streamed = await streamImplementation(provider, messages, emit);
+    const impl = streamed?.impl ?? (await provider.invokeJson(messages, ImplementationResultSchema));
+    const applied = streamed ?? (await writeFileBlocksNow(impl.code));
     return {
       generatedCode: impl.code,
       timeComplexity: impl.time_complexity,

@@ -196,4 +196,43 @@ export class CodexStrategy extends BaseProviderStrategy {
     }
     return parseSseText(await res.text());
   }
+
+  async *stream(messages: ChatMessage[], opts?: InvokeOptions): AsyncIterable<string> {
+    const payload = this.buildPayload(messages, opts);
+    let res = await this.post(payload);
+    if (res.status === 401) {
+      await refreshCodexToken();
+      res = await this.post(payload);
+    }
+    if (!res.ok) {
+      const detail = (await res.text()).slice(0, 300);
+      throw new Error(`codex backend HTTP ${res.status}: ${detail}`);
+    }
+    if (!res.body) throw new Error("codex backend: empty response body");
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const events = buf.split("\n\n");
+      buf = events.pop() ?? "";
+      for (const chunk of events) {
+        const dataLine = chunk.split("\n").find((l) => l.startsWith("data: "));
+        if (!dataLine) continue;
+        const data = dataLine.slice(6);
+        if (data === "[DONE]") continue;
+        let evt: SseEvent;
+        try {
+          evt = JSON.parse(data) as SseEvent;
+        } catch {
+          continue;
+        }
+        if (evt.type === "response.output_text.delta" && evt.delta) yield evt.delta;
+        else if (evt.type === "response.failed")
+          throw new Error(evt.response?.error?.message ?? "codex response failed");
+      }
+    }
+  }
 }

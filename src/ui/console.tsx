@@ -140,6 +140,7 @@ export function Console({ initialRequest }: { initialRequest?: string }) {
       new Repl(
         (...newLines) => setLines((prev) => [...prev, ...newLines]),
         () => exit(),
+        (b) => setBusy(b),
       ),
     [exit],
   );
@@ -148,12 +149,7 @@ export function Console({ initialRequest }: { initialRequest?: string }) {
     setInput("");
     // A new submission re-pins the view so its output is always visible.
     setAnchor(null);
-    setBusy(true);
-    try {
-      await repl.submit(text);
-    } finally {
-      setBusy(false);
-    }
+    await repl.submit(text);
   }
 
   // An initial request (e.g. `nri "fix the bug"` without --cli) is submitted

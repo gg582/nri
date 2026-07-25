@@ -57,6 +57,9 @@ export function extractJson(raw: string): string {
 /**
  * Shared JSON-enforcement loop: invoke -> extract -> zod-validate.
  * On failure, feed the error back to the model and retry (self-correction).
+ * When retries are exhausted, run one salvage pass: the content is usually
+ * fine and only the JSON wrapping failed, so ask the model to reformat its
+ * own last answer instead of regenerating from scratch.
  */
 export async function invokeJsonWithRetry<T>(
   provider: LLMProviderStrategy,
@@ -67,6 +70,7 @@ export async function invokeJsonWithRetry<T>(
   const retries = opts?.retries ?? 2;
   const history: ChatMessage[] = [...messages];
   let lastError = "";
+  let lastRaw = "";
   for (let attempt = 0; attempt <= retries; attempt++) {
     if (attempt > 0) {
       history.push({
@@ -77,11 +81,33 @@ export async function invokeJsonWithRetry<T>(
       });
     }
     const raw = await provider.invoke(history, opts);
+    lastRaw = raw;
     history.push({ role: "assistant", content: raw });
     try {
       return schema.parse(JSON.parse(extractJson(raw)));
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
+    }
+  }
+  if (lastRaw) {
+    try {
+      const salvaged = await provider.invoke(
+        [
+          ...messages,
+          { role: "assistant", content: lastRaw },
+          {
+            role: "user",
+            content:
+              "Your response above could not be parsed as JSON. Reformat the SAME content into " +
+              "ONLY a valid JSON value matching the requested schema — no prose, no markdown " +
+              "fences, and do not drop any file content.",
+          },
+        ],
+        opts,
+      );
+      return schema.parse(JSON.parse(extractJson(salvaged)));
+    } catch (err) {
+      lastError += `; salvage reformat also failed: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
   throw new Error(`Structured output failed after ${retries + 1} attempts: ${lastError}`);

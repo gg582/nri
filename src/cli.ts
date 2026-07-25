@@ -310,9 +310,18 @@ async function main(): Promise<void> {
   stdout.write((final.generatedCode ?? "(none)") + "\n");
 
   if (final.generatedCode) {
-    const { offerApply } = await import("./tools/apply.js");
-    const lines = await offerApply(final.generatedCode, confirm, { yolo: args.yolo, provider: resolver("evaluate") });
-    for (const line of lines) stdout.write(`${line}\n`);
+    const { offerApply, planApply } = await import("./tools/apply.js");
+    // Nodes already write file blocks as they are produced; only run the
+    // end-of-run gate for content that never hit disk (e.g. diffs).
+    const plan = planApply(final.generatedCode);
+    const already = new Set(final.appliedFiles ?? []);
+    const pending = plan.changes.filter((c) => !already.has(c.path));
+    if (plan.changes.length > 0 && pending.length === 0) {
+      stdout.write(`all ${plan.changes.length} file(s) already written during the run.\n`);
+    } else {
+      const lines = await offerApply(final.generatedCode, confirm, { yolo: args.yolo, provider: resolver("evaluate") });
+      for (const line of lines) stdout.write(`${line}\n`);
+    }
   }
 
   if (args.dumpState) {

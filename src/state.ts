@@ -138,6 +138,19 @@ export const AgentState = Annotation.Root({
     reducer: (a, b) => [...a, ...b],
     default: () => [],
   }),
+
+  /** Repo-relative paths already written to disk during the run. */
+  appliedFiles: Annotation<string[]>({
+    reducer: (a, b) => [...a, ...b],
+    default: () => [],
+  }),
+
+  /** True when the test runner could not evaluate the code (unknown language
+   * or missing toolchain) — the loop must stop instead of re-patching blind. */
+  testUnevaluable: Annotation<boolean>({ reducer: (_a, b) => b, default: () => false }),
+
+  /** Last verification output, fed back into the next patch attempt. */
+  lastTestOutput: replace<string>(),
 });
 
 export type AgentStateType = typeof AgentState.State;

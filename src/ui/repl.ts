@@ -51,17 +51,49 @@ const PROVIDER_ADD_STEPS = ["provider name", "api key (empty = env)", "base url 
 
 /**
  * Rendering-agnostic REPL core: shared by the ink console (TTY) and the
- * readline fallback (piped stdin). Returns false from submit() on /exit.
+ * readline fallback (piped stdin).
+ *
+ * Input model: wizard steps and slash commands run immediately, even while
+ * a pipeline request is in flight; plain-text requests are queued FIFO and
+ * drained by pump(). No "busy, wait" rejection — input is never refused.
  */
 export class Repl {
   busy = false;
   private wizard: Wizard | null = null;
   private pendingConfirm: ((ok: boolean) => void) | null = null;
+  private readonly queue: string[] = [];
+  private pumping = false;
 
   constructor(
     private readonly push: (...lines: string[]) => void,
     private readonly onExit: () => void,
+    private readonly onBusyChange?: (busy: boolean) => void,
   ) {}
+
+  private setBusy(busy: boolean): void {
+    this.busy = busy;
+    this.onBusyChange?.(busy);
+  }
+
+  /** Drain queued pipeline requests one at a time. */
+  private async pump(): Promise<void> {
+    if (this.pumping) return;
+    this.pumping = true;
+    this.setBusy(true);
+    try {
+      while (this.queue.length > 0) {
+        const req = this.queue.shift()!;
+        try {
+          await this.runRequest(req);
+        } catch (err) {
+          this.push(`error: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    } finally {
+      this.pumping = false;
+      this.setBusy(false);
+    }
+  }
 
   /** y/n prompt used by the apply gate in auto permission mode. */
   private askConfirm(question: string): Promise<boolean> {
@@ -167,8 +199,17 @@ export class Repl {
       summary: s.compactSummary,
     });
     if (s.generatedCode) {
-      const { offerApply } = await import("../tools/apply.js");
-      this.push(...(await offerApply(s.generatedCode, (q) => this.askConfirm(q), { provider: makeProviderResolver({})("evaluate") })));
+      const { offerApply, planApply } = await import("../tools/apply.js");
+      // Nodes already write file blocks as they are produced; only run the
+      // end-of-run gate for content that never hit disk (e.g. diffs).
+      const plan = planApply(s.generatedCode);
+      const already = new Set(s.appliedFiles ?? []);
+      const pending = plan.changes.filter((c) => !already.has(c.path));
+      if (plan.changes.length > 0 && pending.length === 0) {
+        this.push(`all ${plan.changes.length} file(s) already written during the run.`);
+      } else {
+        this.push(...(await offerApply(s.generatedCode, (q) => this.askConfirm(q), { provider: makeProviderResolver({})("evaluate") })));
+      }
     }
   }
 
@@ -333,7 +374,7 @@ export class Repl {
 
   async submit(text: string): Promise<void> {
     const trimmed = text.trim();
-    // A pending apply confirm takes priority (busy is true while it waits).
+    // A pending apply confirm takes priority (a run waits on it).
     if (this.pendingConfirm) {
       const resolve = this.pendingConfirm;
       this.pendingConfirm = null;
@@ -344,21 +385,28 @@ export class Repl {
     // Empty input is meaningful while a wizard runs (it means "skip this field").
     if (!trimmed && !this.wizard) return;
     this.push(`❯ ${trimmed}`);
-    if (this.busy) {
-      this.push("…busy, wait for the current task.");
+    // Wizard steps and slash commands run immediately, even mid-run.
+    if (this.wizard) {
+      try {
+        await this.handleWizard(trimmed, this.wizard);
+      } catch (err) {
+        this.push(`error: ${err instanceof Error ? err.message : String(err)}`);
+        this.wizard = null;
+      }
       return;
     }
-    this.busy = true;
-    try {
-      if (this.wizard) await this.handleWizard(trimmed, this.wizard);
-      else if (trimmed.startsWith("/")) await this.dispatchSlash(trimmed);
-      else await this.runRequest(trimmed);
-    } catch (err) {
-      this.push(`error: ${err instanceof Error ? err.message : String(err)}`);
-      this.wizard = null;
-    } finally {
-      this.busy = false;
+    if (trimmed.startsWith("/")) {
+      try {
+        await this.dispatchSlash(trimmed);
+      } catch (err) {
+        this.push(`error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
     }
+    // Pipeline requests queue up and run one after another.
+    this.queue.push(trimmed);
+    if (this.pumping) this.push(`queued (#${this.queue.length})`);
+    void this.pump();
   }
 }
 

@@ -1,7 +1,7 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { cp, mkdir, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig } from "../config.js";
@@ -142,6 +142,35 @@ async function applyFileBlocks(plan: ApplyPlan): Promise<string[]> {
     `applied ${plan.changes.length} file(s):`,
     ...lines,
   ];
+}
+
+/**
+ * Incrementally write file blocks found in generated output, so files appear
+ * locally as soon as they are produced (claude-code/kimi-code style) instead
+ * of one dump at run end. Only full-file blocks are handled here — unified
+ * diffs still wait for the end-of-run apply gate. Files whose on-disk
+ * content already matches are skipped (loop iterations rewrite only deltas).
+ */
+export async function writeFileBlocksNow(code: string): Promise<{ written: string[]; lines: string[] }> {
+  const plan = planApply(code);
+  if (plan.format !== "file-blocks") return { written: [], lines: [] };
+  const gate = checkPermission("write files");
+  if (!gate.allowed) return { written: [], lines: [`[apply] skipped: ${gate.reason}`] };
+  const todo = plan.changes.filter(
+    (c) => !(existsSync(c.path) && readFileSync(c.path, "utf8") === c.content),
+  );
+  if (todo.length === 0) return { written: [], lines: [] };
+  await backup(todo.map((c) => c.path));
+  const lines: string[] = gate.advisory ? [`[warn] ${gate.advisory}`] : [];
+  const written: string[] = [];
+  for (const c of todo) {
+    const isNew = !existsSync(c.path);
+    await mkdir(dirname(c.path), { recursive: true });
+    await writeFile(c.path, c.content, "utf8");
+    written.push(c.path);
+    lines.push(`  [apply] ${isNew ? "+" : "~"} ${c.path} (${c.content.split("\n").length} lines)`);
+  }
+  return { written, lines };
 }
 
 /**

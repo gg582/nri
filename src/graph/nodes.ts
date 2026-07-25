@@ -1,5 +1,6 @@
 import type { LLMProviderStrategy } from "../providers/base.js";
 import type { TestRunner } from "../tools/testRunner.js";
+import { writeFileBlocksNow } from "../tools/apply.js";
 import {
   AbstractGraphSchema,
   BusinessContextSchema,
@@ -111,24 +112,30 @@ export function makeFastPatchNode({ provider }: NodeDeps) {
     const feedback = state.preFlight?.violation_reason
       ? `\n\nPrevious attempt was rejected by pre-flight audit: ${state.preFlight.violation_reason}\nFix this.`
       : "";
+    const testFeedback = state.lastTestOutput
+      ? `\n\nLatest test/verification output:\n${state.lastTestOutput}\nFix the errors above.`
+      : "";
     const impl = await provider.invokeJson(
       [
         { role: "system", content: FAST_PATCH_SYSTEM },
         {
           role: "user",
           content:
-            `Request:\n${state.currentRequest}${businessContextBlock(state)}${feedback}` +
+            `Request:\n${state.currentRequest}${businessContextBlock(state)}${feedback}${testFeedback}` +
             (state.generatedCode ? `\n\nCurrent code:\n${state.generatedCode}` : ""),
         },
       ],
       ImplementationResultSchema,
     );
+    // Write produced files immediately (see implement node for rationale).
+    const applied = await writeFileBlocksNow(impl.code);
     return {
       generatedCode: impl.code,
       timeComplexity: impl.time_complexity,
       spaceComplexity: impl.space_complexity,
       preFlight: null,
-      trace: [`[fast-patch] applied (${impl.notes})`],
+      appliedFiles: applied.written,
+      trace: [`[fast-patch] applied (${impl.notes})`, ...applied.lines],
     };
   };
 }
@@ -266,11 +273,15 @@ export function makeImplementNode({ provider }: NodeDeps) {
       ],
       ImplementationResultSchema,
     );
+    // Write produced files immediately — later validation loops rewrite them
+    // in place, so the user watches the implementation materialize.
+    const applied = await writeFileBlocksNow(impl.code);
     return {
       generatedCode: impl.code,
       timeComplexity: impl.time_complexity,
       spaceComplexity: impl.space_complexity,
-      trace: [`[implement] time=${impl.time_complexity} space=${impl.space_complexity}`],
+      appliedFiles: applied.written,
+      trace: [`[implement] time=${impl.time_complexity} space=${impl.space_complexity}`, ...applied.lines],
     };
   };
 }
@@ -332,8 +343,11 @@ export function makeTestRunnerNode({ provider, testRunner }: NodeDeps) {
     return {
       currentTestCoverage: result.coverage,
       iterationCount: state.iterationCount + 1,
+      testUnevaluable: Boolean(result.unevaluable),
+      lastTestOutput: result.passed ? "" : result.output.slice(0, 4000),
       trace: [
-        `[test-runner] coverage=${result.coverage}% target=${state.targetTestCoverage}% passed=${result.passed}`,
+        `[test-runner] coverage=${result.coverage}% target=${state.targetTestCoverage}% passed=${result.passed}` +
+          (result.unevaluable ? " (unevaluable — finalizing without loop)" : ""),
       ],
     };
   };
@@ -409,6 +423,9 @@ export function routeAfterPreFlight(
 
 export function routeAfterTests(state: State): "fast_patch" | "decompose" | "finalize" {
   if (state.currentTestCoverage >= state.targetTestCoverage) return "finalize";
+  // No way to measure progress (missing toolchain/language) — re-patching
+  // blind only wastes iterations; finalize with what we have.
+  if (state.testUnevaluable) return "finalize";
   if (state.iterationCount >= state.maxIterations) return "finalize";
   return state.selectedPath === "FAST_PATH" ? "fast_patch" : "decompose";
 }

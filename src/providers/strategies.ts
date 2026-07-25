@@ -60,10 +60,17 @@ abstract class NativeChatStrategy extends BaseProviderStrategy {
  * Strategy for providers whose official API is OpenAI-compatible and which
  * have no native LangChain package (Moonshot Kimi). Also used for OpenAI
  * itself, where ChatOpenAI IS the native client.
+ *
+ * Sampling-parameter adaptation: some endpoints pin temperature (e.g.
+ * kimi-for-coding allows only 1) or reject token-cap params. A 400 naming a
+ * parameter is fixable, so the offending parameter is dropped (remembered
+ * for the process) and the call retried once — instead of burning a pool
+ * fallback on a parameter mismatch.
  */
 export class OpenAICompatibleStrategy extends BaseProviderStrategy {
   readonly name: string;
   readonly model: string;
+  private readonly droppedParams = new Set<string>();
   private readonly args: {
     name: string;
     model: string;
@@ -85,28 +92,53 @@ export class OpenAICompatibleStrategy extends BaseProviderStrategy {
     this.args = args;
   }
 
+  /** Identify a fixable parameter rejection from an API error, if any. */
+  private static rejectedParam(err: unknown): "temperature" | "maxTokens" | null {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/400|invalid|unsupported/i.test(msg)) return null;
+    if (/temperature/i.test(msg)) return "temperature";
+    if (/max_?tokens|max_completion_tokens/i.test(msg)) return "maxTokens";
+    return null;
+  }
+
   private createClient(opts?: InvokeOptions): ChatOpenAI {
     // gpt-5 / o-series reject `temperature` (only the default 1 is allowed) and
     // the legacy `max_tokens` param. LangChain's isReasoningModel regex only
     // covers o-series, so handle it here: omit temperature and pass
     // max_completion_tokens through modelKwargs.
     const fixedSampling = /^(gpt-5|o\d)/i.test(this.args.model);
+    const dropTemperature = this.droppedParams.has("temperature");
+    const dropMaxTokens = this.droppedParams.has("maxTokens");
     return new ChatOpenAI({
       model: this.args.model,
       apiKey: this.args.apiKey,
       configuration: this.args.baseURL ? { baseURL: this.args.baseURL } : undefined,
       ...(fixedSampling
-        ? { modelKwargs: opts?.maxTokens ? { max_completion_tokens: opts.maxTokens } : {} }
+        ? { modelKwargs: opts?.maxTokens && !dropMaxTokens ? { max_completion_tokens: opts.maxTokens } : {} }
         : {
-            temperature: opts?.temperature ?? this.args.defaultTemperature ?? 0,
-            maxTokens: opts?.maxTokens,
+            ...(dropTemperature
+              ? {}
+              : { temperature: opts?.temperature ?? this.args.defaultTemperature ?? 0 }),
+            ...(dropMaxTokens ? {} : { maxTokens: opts?.maxTokens }),
           }),
     });
   }
 
-  async invoke(messages: ChatMessage[], opts?: InvokeOptions): Promise<string> {
+  private async invokeOnce(messages: ChatMessage[], opts?: InvokeOptions): Promise<string> {
     const res = await this.createClient(opts).invoke(toLangChainMessages(messages));
     return contentToString(res.content);
+  }
+
+  async invoke(messages: ChatMessage[], opts?: InvokeOptions): Promise<string> {
+    try {
+      return await this.invokeOnce(messages, opts);
+    } catch (err) {
+      const param = OpenAICompatibleStrategy.rejectedParam(err);
+      if (!param || this.droppedParams.has(param)) throw err;
+      this.droppedParams.add(param);
+      console.error(`nri: ${this.name}/${this.model} rejects ${param} — retrying without it`);
+      return await this.invokeOnce(messages, opts);
+    }
   }
 }
 

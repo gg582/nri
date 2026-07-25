@@ -38,6 +38,11 @@ export interface NriConfig {
   memory?: {
     backend?: "jsonl" | "rag";
   };
+  /** Console display preferences. */
+  ui?: {
+    /** false = hide pipeline reasoning (trace/node lines) during runs. */
+    thinking?: boolean;
+  };
 }
 
 export const GLOBAL_CONFIG_PATH = storePaths().configFile;
@@ -67,6 +72,9 @@ function merge(base: NriConfig, over: NriConfig): NriConfig {
     },
     memory: {
       backend: over.memory?.backend ?? base.memory?.backend,
+    },
+    ui: {
+      thinking: over.ui?.thinking ?? base.ui?.thinking,
     },
   };
 }

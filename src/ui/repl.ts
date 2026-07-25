@@ -2,6 +2,7 @@ import { buildGraph } from "../graph/builder.js";
 import { makeProviderResolver } from "../providers/resolver.js";
 import { createTestRunner } from "../tools/factory.js";
 import type { AgentStateType } from "../state.js";
+import { loadConfig } from "../config.js";
 
 /** Capture everything a legacy command writes to stdout into log lines. */
 export async function capture(fn: () => Promise<void> | void): Promise<string[]> {
@@ -25,6 +26,7 @@ export const HELP_LINES = [
   "  /model list|assign|set <node|default> <provider:model> [more...]|reorder [node]|candidates",
   "  /permission list|set-mode <plan|auto|yolo>|allow <re>|deny <re>|clear <allow|deny>",
   "  /yolo [off]                       toggle yolo mode (gates off, advisory only)",
+  "  /thinking show|hide               toggle pipeline reasoning output",
   "  /plan <request>                 read-only plan, nothing executed",
   "  /goal set \"<obj>\" [--done-when X --budget N] | status | run | clear",
   "  /swarm [--providers a,b] [--coverage N] <request>",
@@ -74,6 +76,8 @@ export class Repl {
       {},
       { onFallback: (m) => this.push(`  [warn] ${m}`) },
     );
+    // /thinking hide: suppress reasoning lines; results/warnings still show.
+    const thinking = loadConfig().ui?.thinking ?? true;
     // Liveness: node-start lines + a heartbeat while a node runs long, so a
     // slow LLM call never looks like a hang.
     let runningNode: string | null = null;
@@ -85,6 +89,7 @@ export class Repl {
           onNodeStart: (node) => {
             runningNode = node;
             runningSince = Date.now();
+            if (!thinking) return;
             const p = resolver(node);
             this.push(`▶ ${node} (${p.name}/${p.model})`);
           },
@@ -95,7 +100,7 @@ export class Repl {
       },
     );
     const heartbeat = setInterval(() => {
-      if (runningNode) {
+      if (thinking && runningNode) {
         this.push(`  …${runningNode} running ${Math.round((Date.now() - runningSince) / 1000)}s`);
       }
     }, 15_000);
@@ -109,6 +114,7 @@ export class Repl {
         const stream = await graph.stream(input as never, { ...config, streamMode: "updates" });
         for await (const chunk of stream) {
           for (const [node, update] of Object.entries(chunk)) {
+            if (!thinking) continue;
             const u = update as Partial<AgentStateType> | undefined;
             const lines = Array.isArray(u?.trace) ? u.trace : [];
             if (lines.length > 0) this.push(...lines.map((l) => `  ${l}`));
@@ -128,7 +134,7 @@ export class Repl {
       for (let i = 0; i < 10; i++) {
         const snap = await graph.getState(config);
         if (!snap.next.includes("human_approval")) break;
-        this.push("  [hitl] proposal graph auto-approved");
+        if (thinking) this.push("  [hitl] proposal graph auto-approved");
         await drive(null);
       }
     } finally {
@@ -225,6 +231,11 @@ export class Repl {
         this.push(...(await capture(() => permissionCommand(["set-mode", off ? "auto" : "yolo"]))));
         if (!off)
           this.push("yolo: permission gates off — deny-listed/destructive commands run with advisory only. `/yolo off` reverts.");
+        return;
+      }
+      case "thinking": {
+        const { thinkingCommand } = await import("../commands/thinking.js");
+        this.push(...(await capture(() => thinkingCommand(rest))));
         return;
       }
       case "plan": {

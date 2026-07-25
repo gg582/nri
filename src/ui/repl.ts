@@ -4,6 +4,7 @@ import { createTestRunner } from "../tools/factory.js";
 import type { AgentStateType } from "../state.js";
 import { loadConfig } from "../config.js";
 import { cleanupVisualTemps } from "../tools/visual.js";
+import { compressConversation } from "../context/conversation.js";
 
 /** Capture everything a legacy command writes to stdout into log lines. */
 export async function capture(fn: () => Promise<void> | void): Promise<string[]> {
@@ -34,6 +35,7 @@ export const HELP_LINES = [
   "  /compact <state.json> [--out p]  fold run context into a summary",
   "  /graph-compact <state.json>      compact, preserving graph node ids/edges",
   "  /memory list|search|ingest|stats|backend <jsonl|rag>",
+  "  /context show|clear                inspect or reset the current conversation graph",
   "  /help                            this text",
   "  /exit                            quit (also: /quit)",
   "keys: ↑/↓·PgUp/PgDn scroll log · ^↑/^↓ top/bottom · ←/→ browse prompt history (Enter re-submits)",
@@ -67,6 +69,9 @@ export class Repl {
   private pumping = false;
   /** Submitted pipeline prompts, newest first (for ←/→ history browsing). */
   private readonly promptHistory: string[] = [];
+  /** Completed turns, kept separately from prompt history so queued future
+   * requests can never leak into the model's context. */
+  private readonly conversationTurns: Array<{ request: string; outcome: string }> = [];
 
   constructor(
     private readonly push: (...lines: string[]) => void,
@@ -109,6 +114,16 @@ export class Repl {
     return new Promise((resolve) => {
       this.pendingConfirm = resolve;
     });
+  }
+
+  /**
+   * Carry the immediately relevant part of this REPL conversation into a new
+   * graph invocation. A graph is intentionally recreated per request for
+   * independent streaming/HITL lifecycles, so its in-memory checkpointer alone
+   * cannot preserve these turns.
+   */
+  private conversationContext(): string {
+    return compressConversation(this.conversationTurns);
   }
 
   private async runRequest(request: string): Promise<void> {
@@ -168,6 +183,7 @@ export class Repl {
 
       await drive({
         rawRequest: request,
+        conversationContext: this.conversationContext(),
         outputLocale: "en-US",
         targetTestCoverage: 80,
         maxIterations: 5,
@@ -211,6 +227,10 @@ export class Repl {
       target: s.targetTestCoverage,
       iterations: s.iterationCount,
       summary: s.compactSummary,
+    });
+    this.conversationTurns.push({
+      request,
+      outcome: s.finalOutput ?? s.compactSummary ?? `path=${s.selectedPath}; coverage=${s.currentTestCoverage}%`,
     });
     if (s.generatedCode) {
       const { offerApply, planApply } = await import("../tools/apply.js");
@@ -316,6 +336,16 @@ export class Repl {
       case "memory": {
         const { memoryCommand } = await import("../commands/memory.js");
         this.push(...(await capture(() => memoryCommand(rest))));
+        return;
+      }
+      case "context": {
+        if (rest[0] === "clear") {
+          this.conversationTurns.length = 0;
+          this.push("conversation context cleared.");
+        } else {
+          const context = this.conversationContext();
+          this.push(context ? `conversation graph:\n${context}` : "conversation context is empty.");
+        }
         return;
       }
       default:

@@ -1,8 +1,8 @@
 import type { LLMProviderStrategy, ChatMessage } from "../providers/base.js";
 import { extractJson } from "../providers/base.js";
 import { z } from "zod";
-import { createHash } from "node:crypto";
 import type { TestRunner } from "../tools/testRunner.js";
+import { writeFileBlocksNow } from "../tools/apply.js";
 import { existingProjectFiles } from "../tools/layout.js";
 import { IncrementalFileParser, type StreamedFile } from "../tools/streamApply.js";
 import {
@@ -51,16 +51,6 @@ const businessContextBlock = (s: State) =>
     ? `\n\nDeclared business context:\n${JSON.stringify(s.businessContext, null, 2)}`
     : "";
 
-/** Completed-turn graph supplied by the REPL. Keep it separate from the
- * current request so normalization cannot mistake historical work for a new
- * instruction. */
-const conversationContextBlock = (s: State) =>
-  s.conversationContext
-    ? `\n\nCompressed conversation graph (preserve follow-up constraints; do not redo completed work):\n${s.conversationContext}`
-    : "";
-
-const fingerprint = (code: string) => createHash("sha256").update(code).digest("hex").slice(0, 16);
-
 /**
  * Anchor the model to the layout already on disk (session-written files plus
  * a bounded cwd scan) so it modifies existing files instead of inventing a
@@ -93,9 +83,13 @@ async function streamImplementation(
   const written: string[] = [];
   const lines: string[] = [];
   const note = (line: string) => (emit ? emit(line) : lines.push(line));
-  // Streaming is used for responsiveness only. Persisting partial model output
-  // bypasses the apply gate and can overwrite a repository before review.
-  const flush = async (_files: StreamedFile[]): Promise<void> => undefined;
+  const flush = async (files: StreamedFile[]): Promise<void> => {
+    for (const f of files) {
+      const res = await writeFileBlocksNow(`// ${f.path}\n${f.content}`);
+      written.push(...res.written);
+      for (const line of res.lines) note(line);
+    }
+  };
   try {
     let raw = "";
     for await (const delta of provider.stream(messages)) {
@@ -104,6 +98,10 @@ async function streamImplementation(
     }
     await flush(parser.finish());
     const impl = ImplementationResultSchema.parse(JSON.parse(extractJson(raw)));
+    // Canonical pass: catches any block the incremental parser missed.
+    const res = await writeFileBlocksNow(impl.code);
+    written.push(...res.written);
+    for (const line of res.lines) note(line);
     return { impl, written, lines };
   } catch {
     return null;
@@ -118,7 +116,7 @@ export function makeNormalizeNode({ provider }: NodeDeps) {
     const result = await provider.invokeJson(
       [
         { role: "system", content: NORMALIZE_SYSTEM },
-        { role: "user", content: `Current raw request:\n${raw}${conversationContextBlock(state)}` },
+        { role: "user", content: `Raw request:\n${raw}` },
       ],
       NormalizedRequestSchema,
     );
@@ -140,7 +138,7 @@ export function makeTriageNode({ provider }: NodeDeps) {
     const result = await provider.invokeJson(
       [
         { role: "system", content: TRIAGE_SYSTEM },
-        { role: "user", content: `Request:\n${state.currentRequest}${conversationContextBlock(state)}` },
+        { role: "user", content: `Request:\n${state.currentRequest}` },
       ],
       TriageResultSchema,
     );
@@ -161,7 +159,7 @@ export function makeBusinessContextNode({ provider }: NodeDeps) {
     const ctx = await provider.invokeJson(
       [
         { role: "system", content: BUSINESS_CONTEXT_SYSTEM },
-        { role: "user", content: `Request:\n${state.currentRequest}${conversationContextBlock(state)}` },
+        { role: "user", content: `Request:\n${state.currentRequest}` },
       ],
       BusinessContextSchema,
     );
@@ -189,20 +187,19 @@ export function makeFastPatchNode({ provider, emit }: NodeDeps) {
       {
         role: "user",
         content:
-          `Request:\n${state.currentRequest}${conversationContextBlock(state)}${businessContextBlock(state)}${layoutBlock(state)}${feedback}${testFeedback}` +
+          `Request:\n${state.currentRequest}${businessContextBlock(state)}${layoutBlock(state)}${feedback}${testFeedback}` +
           (state.generatedCode ? `\n\nCurrent code:\n${state.generatedCode}` : ""),
       },
     ];
     // Streamed path: files hit disk one by one as the model emits them.
     const streamed = await streamImplementation(provider, messages, emit);
     const impl = streamed?.impl ?? (await provider.invokeJson(messages, ImplementationResultSchema));
-    const applied = streamed ?? { written: [], lines: ["[apply] deferred until explicit approval"] };
+    const applied = streamed ?? (await writeFileBlocksNow(impl.code));
     return {
       generatedCode: impl.code,
       timeComplexity: impl.time_complexity,
       spaceComplexity: impl.space_complexity,
       preFlight: null,
-      implementationFingerprints: [fingerprint(impl.code)],
       appliedFiles: applied.written,
       trace: [`[fast-patch] applied (${impl.notes})`, ...applied.lines],
     };
@@ -216,7 +213,7 @@ export function makeDecomposeNode({ provider }: NodeDeps) {
     const tree = await provider.invokeJson(
       [
         { role: "system", content: DECOMPOSE_SYSTEM },
-        { role: "user", content: `Request:\n${state.currentRequest}${conversationContextBlock(state)}${businessContextBlock(state)}` },
+        { role: "user", content: `Request:\n${state.currentRequest}${businessContextBlock(state)}` },
       ],
       TaskNodeSchema,
     );
@@ -234,7 +231,7 @@ export function makeAbstractGraphNode({ provider }: NodeDeps) {
         {
           role: "user",
           content:
-            `Task tree:\n${JSON.stringify(state.taskTree, null, 2)}` + conversationContextBlock(state) + businessContextBlock(state),
+            `Task tree:\n${JSON.stringify(state.taskTree, null, 2)}` + businessContextBlock(state),
         },
       ],
       AbstractGraphSchema,
@@ -263,7 +260,7 @@ export function makeProposalNode({ provider }: NodeDeps) {
           content:
             `Abstract graph:\n${JSON.stringify(state.abstractGraph, null, 2)}` +
             `\n\nTask tree:\n${JSON.stringify(state.taskTree, null, 2)}` +
-            conversationContextBlock(state) + businessContextBlock(state) +
+            businessContextBlock(state) +
             feedback,
         },
       ],
@@ -293,7 +290,7 @@ export function makePreFlightNode({ provider }: NodeDeps) {
         { role: "system", content: PRE_FLIGHT_SYSTEM },
         {
           role: "user",
-          content: `Plan under review:\n${plan}${conversationContextBlock(state)}${businessContextBlock(state)}`,
+          content: `Plan under review:\n${plan}${businessContextBlock(state)}`,
         },
       ],
       PreFlightResultSchema,
@@ -336,7 +333,7 @@ export function makeImplementNode({ provider, emit }: NodeDeps) {
         content:
           `Abstract graph:\n${JSON.stringify(state.abstractGraph, null, 2)}` +
           `\n\nAdopted proposals:\n${JSON.stringify(state.proposalGraph, null, 2)}` +
-          conversationContextBlock(state) + businessContextBlock(state) +
+          businessContextBlock(state) +
           layoutBlock(state),
       },
     ];
@@ -345,12 +342,11 @@ export function makeImplementNode({ provider, emit }: NodeDeps) {
     // implementation materialize.
     const streamed = await streamImplementation(provider, messages, emit);
     const impl = streamed?.impl ?? (await provider.invokeJson(messages, ImplementationResultSchema));
-    const applied = streamed ?? { written: [], lines: ["[apply] deferred until explicit approval"] };
+    const applied = streamed ?? (await writeFileBlocksNow(impl.code));
     return {
       generatedCode: impl.code,
       timeComplexity: impl.time_complexity,
       spaceComplexity: impl.space_complexity,
-      implementationFingerprints: [fingerprint(impl.code)],
       appliedFiles: applied.written,
       trace: [`[implement] time=${impl.time_complexity} space=${impl.space_complexity}`, ...applied.lines],
     };
@@ -367,7 +363,7 @@ export function makeEvaluationNode({ provider }: NodeDeps) {
         {
           role: "user",
           content:
-            `Objective:\n${state.currentRequest}${conversationContextBlock(state)}\n\n` +
+            `Objective:\n${state.currentRequest}\n\n` +
             `Declared complexity: time=${state.timeComplexity} space=${state.spaceComplexity}\n\n` +
             `Implementation:\n${state.generatedCode}`,
         },
@@ -416,7 +412,7 @@ export function makeTestRunnerNode({ provider, testRunner }: NodeDeps) {
           { role: "system", content: TEST_WRITER_SYSTEM },
           {
             role: "user",
-            content: `Implementation:\n${state.generatedCode}${conversationContextBlock(state)}${businessContextBlock(state)}`,
+            content: `Implementation:\n${state.generatedCode}${businessContextBlock(state)}`,
           },
         ],
         TestSpecSchema,
@@ -432,7 +428,7 @@ export function makeTestRunnerNode({ provider, testRunner }: NodeDeps) {
         { role: "system", content: TEST_WRITER_SYSTEM },
         {
           role: "user",
-          content: `Implementation:\n${state.generatedCode}${conversationContextBlock(state)}${businessContextBlock(state)}`,
+          content: `Implementation:\n${state.generatedCode}${businessContextBlock(state)}`,
         },
       ]);
       testInput = raw;
@@ -464,14 +460,16 @@ export function makeDocsNode({ provider }: NodeDeps) {
         {
           role: "user",
           content:
-            `Request:\n${state.currentRequest}${conversationContextBlock(state)}${businessContextBlock(state)}${layoutBlock(state)}` +
+            `Request:\n${state.currentRequest}${businessContextBlock(state)}${layoutBlock(state)}` +
             `\n\nImplementation notes: time=${state.timeComplexity ?? "-"} space=${state.spaceComplexity ?? "-"}`,
         },
       ],
       DocsResultSchema,
     );
+    const applied = await writeFileBlocksNow(result.docs);
     return {
-      trace: ["[docs] generated documentation; apply deferred until explicit approval"],
+      appliedFiles: applied.written,
+      trace: ["[docs] wrote project documentation", ...applied.lines],
     };
   };
 }
@@ -590,9 +588,6 @@ export function routeAfterTests(
   // No way to measure progress (missing toolchain/language) — re-patching
   // blind only wastes iterations; finalize with what we have.
   if (state.testUnevaluable) return "finalize";
-  const fingerprints = state.implementationFingerprints ?? [];
-  const latest = fingerprints.at(-1);
-  if (latest && fingerprints.slice(0, -1).includes(latest)) return "finalize";
   if (state.iterationCount >= state.maxIterations) return "finalize";
   return state.selectedPath === "FAST_PATH" ? "fast_patch" : "decompose";
 }
@@ -601,18 +596,3 @@ export function routeAfterVisual(state: State): "docs" | "finalize" {
   return state.selectedPath === "HEAVY_PATH" ? "docs" : "finalize";
 }
 
-/* ---------------- Optional deterministic simple-change bypass contracts ---------------- */
-
-export interface ScopeBoundaries { targetFiles: string[]; excludedModules: string[]; maxChangeSize: number; }
-export interface ParsedChangeRequest { changeDescription: string; businessContext: string; scopeBoundaries: ScopeBoundaries; rawRequest: string; }
-export type SimpleChangeCategory = "style-improvement" | "regex-cleanup" | "convention-unification" | "equivalent-complexity";
-export interface DetectedIndicator { category: SimpleChangeCategory; indicator: string; confidence: number; }
-export interface DetectedSimpleChange { isSimple: boolean; indicators: DetectedIndicator[]; reason: string; }
-export interface EditOperation { type: "replace" | "insert" | "delete"; file: string; line?: number; oldText?: string; newText?: string; position?: number; }
-export interface VerificationStep { name: string; command: string; tool: string; }
-export interface TaskGroup { id: string; filesToModify: string[]; editOperations: EditOperation[]; verificationSteps: VerificationStep[]; toolInvocations: string[]; orderedSteps: string[]; dependencies: Array<{ from: string; to: string }>; validated: boolean; }
-export interface ComponentScore { componentId: string; complexityScore: number; riskScore: number; scopeScore: number; simplicityScore: number; }
-export interface SimplicityScores { componentScores: ComponentScore[]; weightedGroupScore: number; totalSteps: number; groupIsSimple: boolean; threshold: number; }
-export type ExecutionPath = "quick-diff-patch" | "full-decision-graph";
-export interface ExecutionResult { path: ExecutionPath; success: boolean; appliedFiles: string[]; diff: string; errors: string[]; }
-export interface CommitResult { commitHash: string; pushed: boolean; remoteUrl: string; remoteRef: string; }

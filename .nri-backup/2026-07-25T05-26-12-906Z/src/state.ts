@@ -101,8 +101,6 @@ const replace = <T>() => Annotation<T>({ reducer: (_a, b) => b, default: undefin
 export const AgentState = Annotation.Root({
   /** Untouched user input; normalize reads this, everything else uses the canonical form. */
   rawRequest: replace<string>(),
-  /** Compact graph of completed REPL turns relevant to this request. */
-  conversationContext: replace<string>(),
   originalRequest: replace<string>(),
   currentRequest: replace<string>(),
   targetTestCoverage: replace<number>(),
@@ -153,13 +151,6 @@ export const AgentState = Annotation.Root({
 
   /** Last verification output, fed back into the next patch attempt. */
   lastTestOutput: replace<string>(),
-
-  /** Hashes of generated candidates in this run. Repeating a candidate after
-   * a failed verification is a no-progress loop and must terminate safely. */
-  implementationFingerprints: Annotation<string[]>({
-    reducer: (a, b) => [...a, ...b],
-    default: () => [],
-  }),
 });
 
 export type AgentStateType = typeof AgentState.State;

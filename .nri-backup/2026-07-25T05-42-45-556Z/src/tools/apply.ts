@@ -1,12 +1,11 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { cp, mkdir, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig } from "../config.js";
 import { checkPermission } from "./permissions.js";
-import { buildChangeMesh, interpretChangeMesh, summarizeChangeMesh } from "./changeMesh.js";
 
 const execAsync = promisify(exec);
 
@@ -19,21 +18,6 @@ export interface FileChange {
 export interface ApplyPlan {
   format: "unified-diff" | "file-blocks" | "none";
   changes: FileChange[];
-}
-
-const PROTECTED_PATH = /^(?:\.git\/|\.nri-backup\/|node_modules\/)|(?:^|\/)\.env(?:\.|$)/;
-
-/**
- * Structural guard only. Size is not a safety signal: a coherent 1,000-line
- * rewrite is valid, whereas an ungrounded duplicate path is not.
- */
-function validatePlan(plan: ApplyPlan): string | null {
-  const duplicate = plan.changes.find((change, index) => plan.changes.findIndex((other) => other.path === change.path) !== index);
-  if (duplicate) return `safety block: duplicate edits for ${duplicate.path}`;
-  for (const change of plan.changes) {
-    if (PROTECTED_PATH.test(change.path)) return `safety block: protected path ${change.path}`;
-  }
-  return null;
 }
 
 /** Reject anything escaping the working directory. */
@@ -177,14 +161,25 @@ async function applyFileBlocks(plan: ApplyPlan): Promise<string[]> {
  * content already matches are skipped (loop iterations rewrite only deltas).
  */
 export async function writeFileBlocksNow(code: string): Promise<{ written: string[]; lines: string[] }> {
-  void code;
-  return { written: [], lines: ["[apply] incremental writes disabled; review the change mesh and approve first"] };
-}
-
-/** Legacy synchronous bypasses are deliberately disabled: all writes must go
- * through offerApply(), which enforces review and mesh validation. */
-export function applyQuickDiffPatch(_diff: string): never {
-  throw new Error("direct patch application is disabled; review the change mesh through the apply gate");
+  const plan = planApply(code);
+  if (plan.format !== "file-blocks") return { written: [], lines: [] };
+  const gate = checkPermission("write files");
+  if (!gate.allowed) return { written: [], lines: [`[apply] skipped: ${gate.reason}`] };
+  const todo = plan.changes.filter(
+    (c) => !(existsSync(c.path) && readFileSync(c.path, "utf8") === c.content),
+  );
+  if (todo.length === 0) return { written: [], lines: [] };
+  await backup(todo.map((c) => c.path));
+  const lines: string[] = gate.advisory ? [`[warn] ${gate.advisory}`] : [];
+  const written: string[] = [];
+  for (const c of todo) {
+    const isNew = !existsSync(c.path);
+    await mkdir(dirname(c.path), { recursive: true });
+    await writeFile(c.path, c.content, "utf8");
+    written.push(c.path);
+    lines.push(`  [apply] ${isNew ? "+" : "~"} ${c.path} (${c.content.split("\n").length} lines)`);
+  }
+  return { written, lines };
 }
 
 /**
@@ -206,19 +201,9 @@ export async function offerApply(
   const refined = await refineChanges(generatedCode, { provider: opts?.provider });
   const plan = refined.plan;
   if (plan.format === "none") return ["no applicable diff/file-blocks detected — output left unapplied."];
-  const safetyBlock = validatePlan(plan);
-  if (safetyBlock) return [`${safetyBlock}; output left unapplied.`];
   const mode = opts?.yolo ? "yolo" : (loadConfig().permissions?.mode ?? "auto");
   const summary = [
     `detected ${plan.format}: ${plan.changes.length} file(s)`,
-    ...(() => {
-      const mesh = buildChangeMesh(plan);
-      const interpretation = interpretChangeMesh(mesh);
-      return [
-        ...summarizeChangeMesh(mesh),
-        `graph interpretation: ${interpretation.kind}; +${interpretation.plusWeight}/-${interpretation.minusWeight}; clusters=${interpretation.clusters.length}; max-distance=${interpretation.maxDistance}`,
-      ];
-    })(),
     ...summarizePlan(plan),
     ...refined.report,
   ];

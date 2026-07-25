@@ -1,4 +1,5 @@
 import { loadConfig } from "../config.js";
+import { z } from "zod";
 import {
   BaseProviderStrategy,
   type ChatMessage,
@@ -65,6 +66,48 @@ export class TrialStrategy extends BaseProviderStrategy {
       if (this.benched.has(i)) continue;
       try {
         return await this.strategies[i].invoke(messages, opts);
+      } catch (err) {
+        this.benched.add(i);
+        lastError = err;
+        this.notifyFailure(i, err);
+      }
+    }
+    throw lastError;
+  }
+
+  /**
+   * Structured output with model escalation: when a member's own
+   * retry/repair loop is exhausted, the next pool model takes over the same
+   * request instead of failing the whole call.
+   */
+  override async invokeJson<T>(
+    messages: ChatMessage[],
+    schema: z.ZodType<T>,
+    opts?: InvokeOptions,
+  ): Promise<T> {
+    let lastError: unknown = new Error("all models in the trial pool failed");
+    for (let i = 0; i < this.strategies.length; i++) {
+      if (this.benched.has(i)) continue;
+      try {
+        return await this.strategies[i].invokeJson(messages, schema, opts);
+      } catch (err) {
+        this.benched.add(i);
+        lastError = err;
+        this.notifyFailure(i, err);
+      }
+    }
+    throw lastError;
+  }
+
+  /** Vision critique with pool escalation (multimodal members only). */
+  async invokeVision(prompt: string, imagePath: string): Promise<string> {
+    let lastError: unknown = new Error("no multimodal model in the trial pool");
+    for (let i = 0; i < this.strategies.length; i++) {
+      if (this.benched.has(i)) continue;
+      const member = this.strategies[i];
+      if (!member.invokeVision) continue;
+      try {
+        return await member.invokeVision(prompt, imagePath);
       } catch (err) {
         this.benched.add(i);
         lastError = err;

@@ -46,7 +46,15 @@ function parseUnifiedDiff(text: string): FileChange[] {
 }
 
 /**
- * Detect full-file blocks. Recognized markers:
+ * File-block path markers. Directory-prefixed paths (src/foo.cpp) always
+ * count; root-level files count only for doc/config extensions (README.md,
+ * config.toml, ...) so a code comment like `// foo.py` can never split a
+ * source file. Used by parseFileBlocks and the incremental stream parser.
+ */
+export const FILE_MARKER_PATTERN =
+  "(?:[\\w.-]+\\/)+[\\w.-]+\\.\\w+|[\\w.-]+\\.(?:md|markdown|txt|toml|ya?ml|json|cfg|ini|mk)";
+
+/** Detect full-file blocks. Recognized markers:
  *   ```ts\n// src/foo.ts\n... ```  |  // src/foo.ts\n<code lines>
  *   ### src/foo.ts  (heading followed by a fenced block)
  */
@@ -54,9 +62,10 @@ function parseFileBlocks(text: string): FileChange[] {
   const changes: FileChange[] = [];
   const fenceRe = /```[\w-]*\n([\s\S]*?)```/g;
   let m: RegExpExecArray | null;
+  const headerRe = new RegExp(`^\\s*(?:\\/\\/|#)\\s*(${FILE_MARKER_PATTERN})\\s*\\n`);
   while ((m = fenceRe.exec(text)) !== null) {
     const body = m[1];
-    const header = body.match(/^\s*(?:\/\/|#)\s*((?:[\w.-]+\/)+[\w.-]+\.\w+)\s*\n/);
+    const header = body.match(headerRe);
     if (header) {
       const path = safeRelPath(header[1]);
       if (path) changes.push({ path, kind: "full-file", content: body.slice(header[0].length) });
@@ -64,7 +73,7 @@ function parseFileBlocks(text: string): FileChange[] {
   }
   if (changes.length > 0) return changes;
   // dogfood style: bare "// path/to/file" comment sections outside fences
-  const bareRe = /^(?:\/\/|#)\s+((?:[\w.-]+\/)+[\w.-]+\.\w+)\s*$/gm;
+  const bareRe = new RegExp(`^(?:\\/\\/|#)\\s+(${FILE_MARKER_PATTERN})\\s*$`, "gm");
   const marks: { path: string; index: number }[] = [];
   while ((m = bareRe.exec(text)) !== null) {
     const path = safeRelPath(m[1]);

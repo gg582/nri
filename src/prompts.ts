@@ -32,11 +32,15 @@ Analyze the request and any provided codebase context, then respond with ONLY va
 export const FAST_PATCH_SYSTEM = `You are the Fast-Path Patch Engine.
 Apply a minimal, targeted fix. Do NOT restructure. Do NOT add speculative features.
 Also remove any unexplained or redundant code introduced by the patch.
+Never create a duplicate copy of a file under a different directory (e.g. both
+src/foo.cpp and MyApp/src/foo.cpp) — modify the existing file at its path.
 
 Format the code as file blocks: concatenate every file you produce, each
 starting with a comment line holding its repo-relative path, e.g.
 // src/calculator.cpp
 <file content...>
+Do NOT write documentation files (README, *.md) — a separate step generates
+them. Source, build, and test files only.
 
 Respond with ONLY valid JSON:
 {
@@ -121,11 +125,15 @@ Fill in the detailed implementation by traversing the abstract graph's primal no
 1. TOP-DOWN first pass: high-level structure (interfaces, module skeletons) down to atomic logic.
 2. BOTTOM-UP second pass: let low-level constraints refine the higher-level interfaces.
 3. Respect each primal node's input/output contract exactly.
+4. When existing project files are listed, modify them at their exact paths —
+   never create a duplicate copy of a file under a different directory.
 
 Format the code as file blocks: concatenate every file you produce, each
 starting with a comment line holding its repo-relative path, e.g.
 // src/calculator.cpp
 <file content...>
+Do NOT write documentation files (README, *.md) — a separate step generates
+them. Source, build, and test files only.
 
 Respond with ONLY valid JSON:
 {
@@ -133,6 +141,27 @@ Respond with ONLY valid JSON:
   "time_complexity": string,
   "space_complexity": string,
   "notes": string
+}`;
+
+export const DOCS_SYSTEM = `You are the Documentation Engine.
+Write project documentation as file blocks, each starting with a comment
+line holding its repo-relative path (e.g. // README.md). Write a concise
+README.md covering: features, project structure, build/run instructions,
+and usage. Documentation files ONLY — no source code, no prose outside
+file blocks.
+
+Respond with ONLY valid JSON:
+{
+  "docs": string  // documentation file blocks as described above
+}`;
+
+export const VISUAL_CRITIQUE_SYSTEM = `You are a UI/UX reviewer looking at a screenshot of the app just built.
+Judge layout, alignment, spacing, readability, and obvious visual bugs
+(overlap, truncation, blank areas, unreadable text).
+Respond with ONLY valid JSON:
+{
+  "ok": boolean,    // true when the UI looks clean and usable
+  "issues": string  // concrete visual problems to fix (empty when ok)
 }`;
 
 export const EVALUATION_SYSTEM = `You are the Execution & Evaluation Engine.

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { repairJson } from "../tools/jsonRepair.js";
 
 /** A single chat message handed to a provider strategy. */
 export interface ChatMessage {
@@ -28,6 +29,12 @@ export interface LLMProviderStrategy {
 
   /** Free-form chat completion. */
   invoke(messages: ChatMessage[], opts?: InvokeOptions): Promise<string>;
+
+  /**
+   * Optional vision call: critique/describe an image (screenshot). Present
+   * only on multimodal strategies; the visual-check node skips otherwise.
+   */
+  invokeVision?(prompt: string, imagePath: string): Promise<string>;
 
   /**
    * Optional token streaming: yield raw text deltas as the model produces
@@ -63,11 +70,13 @@ export function extractJson(raw: string): string {
 }
 
 /**
- * Shared JSON-enforcement loop: invoke -> extract -> zod-validate.
- * On failure, feed the error back to the model and retry (self-correction).
- * When retries are exhausted, run one salvage pass: the content is usually
- * fine and only the JSON wrapping failed, so ask the model to reformat its
- * own last answer instead of regenerating from scratch.
+ * Shared JSON-enforcement loop, in escalating stages:
+ *   1. deterministic repair of the response (free: close cut-off strings and
+ *      brackets — the usual output-limit truncation),
+ *   2. feed the error (with a snippet around the failure position) back to
+ *      the model and retry,
+ *   3. one salvage pass asking the model to reformat its own last answer.
+ * Model *switching* is handled one level up by TrialStrategy.invokeJson.
  */
 export async function invokeJsonWithRetry<T>(
   provider: LLMProviderStrategy,
@@ -79,23 +88,45 @@ export async function invokeJsonWithRetry<T>(
   const history: ChatMessage[] = [...messages];
   let lastError = "";
   let lastRaw = "";
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    if (attempt > 0) {
-      history.push({
-        role: "user",
-        content:
-          `Your previous response failed validation: ${lastError}\n` +
-          "Respond again with ONLY a valid JSON value matching the required schema. No prose, no markdown fences.",
-      });
+
+  const tryParse = (raw: string): { ok: boolean; value?: T; error: string } => {
+    const candidates: string[] = [];
+    try {
+      candidates.push(extractJson(raw));
+    } catch (err) {
+      candidates.push(raw);
+      lastError = err instanceof Error ? err.message : String(err);
     }
+    const repaired = repairJson(candidates[0]);
+    if (repaired !== candidates[0]) candidates.push(repaired);
+    for (const candidate of candidates) {
+      try {
+        return { ok: true, value: schema.parse(JSON.parse(candidate)), error: "" };
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+      }
+    }
+    return { ok: false, error: lastError };
+  };
+
+  const feedback = (error: string, raw: string): string => {
+    const pos = error.match(/position (\d+)/)?.[1];
+    const snippet = pos
+      ? `\nNear the failure point: ...${raw.slice(Math.max(0, Number(pos) - 80), Number(pos) + 80)}...`
+      : "";
+    return (
+      `Your previous response failed validation: ${error}${snippet}\n` +
+      "Respond again with ONLY a valid JSON value matching the required schema. No prose, no markdown fences."
+    );
+  };
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (attempt > 0) history.push({ role: "user", content: feedback(lastError, lastRaw) });
     const raw = await provider.invoke(history, opts);
     lastRaw = raw;
     history.push({ role: "assistant", content: raw });
-    try {
-      return schema.parse(JSON.parse(extractJson(raw)));
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
-    }
+    const { ok, value } = tryParse(raw);
+    if (ok) return value as T;
   }
   if (lastRaw) {
     try {
@@ -113,7 +144,8 @@ export async function invokeJsonWithRetry<T>(
         ],
         opts,
       );
-      return schema.parse(JSON.parse(extractJson(salvaged)));
+      const { ok, value } = tryParse(salvaged);
+      if (ok) return value as T;
     } catch (err) {
       lastError += `; salvage reformat also failed: ${err instanceof Error ? err.message : String(err)}`;
     }

@@ -3,6 +3,7 @@ import { ChatAnthropic } from "@langchain/anthropic";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { ChatXAI } from "@langchain/xai";
 import { ChatDeepSeek } from "@langchain/deepseek";
+import { readFileSync } from "node:fs";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { HumanMessage, SystemMessage, AIMessage, BaseMessage } from "@langchain/core/messages";
 import { BaseProviderStrategy, type ChatMessage, type InvokeOptions } from "./base.js";
@@ -146,6 +147,19 @@ export class OpenAICompatibleStrategy extends BaseProviderStrategy {
       console.error(`nri: ${this.name}/${this.model} rejects ${param} — retrying without it`);
       return await this.invokeOnce(messages, opts);
     }
+  }
+
+  async invokeVision(prompt: string, imagePath: string): Promise<string> {
+    const data = readFileSync(imagePath).toString("base64");
+    const res = await this.createClient().invoke([
+      new HumanMessage({
+        content: [
+          { type: "text", text: prompt },
+          { type: "image_url", image_url: { url: `data:image/png;base64,${data}` } },
+        ],
+      }),
+    ]);
+    return contentToString(res.content);
   }
 
   async *stream(messages: ChatMessage[], opts?: InvokeOptions): AsyncIterable<string> {

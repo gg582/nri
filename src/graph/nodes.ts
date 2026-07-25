@@ -1,7 +1,9 @@
 import type { LLMProviderStrategy, ChatMessage } from "../providers/base.js";
 import { extractJson } from "../providers/base.js";
+import { z } from "zod";
 import type { TestRunner } from "../tools/testRunner.js";
 import { writeFileBlocksNow } from "../tools/apply.js";
+import { existingProjectFiles } from "../tools/layout.js";
 import { IncrementalFileParser, type StreamedFile } from "../tools/streamApply.js";
 import {
   AbstractGraphSchema,
@@ -16,10 +18,12 @@ import {
   TriageResultSchema,
   type AgentStateType,
 } from "../state.js";
+import { captureScreenshot, detectVisualTarget } from "../tools/visual.js";
 import {
   ABSTRACT_GRAPH_SYSTEM,
   BUSINESS_CONTEXT_SYSTEM,
   DECOMPOSE_SYSTEM,
+  DOCS_SYSTEM,
   EVALUATION_SYSTEM,
   FAST_PATCH_SYSTEM,
   FINALIZE_SYSTEM,
@@ -29,6 +33,7 @@ import {
   PROPOSAL_SYSTEM,
   TEST_WRITER_SYSTEM,
   TRIAGE_SYSTEM,
+  VISUAL_CRITIQUE_SYSTEM,
 } from "../prompts.js";
 
 export interface NodeDeps {
@@ -45,6 +50,21 @@ const businessContextBlock = (s: State) =>
   s.businessContext
     ? `\n\nDeclared business context:\n${JSON.stringify(s.businessContext, null, 2)}`
     : "";
+
+/**
+ * Anchor the model to the layout already on disk (session-written files plus
+ * a bounded cwd scan) so it modifies existing files instead of inventing a
+ * parallel directory tree.
+ */
+const layoutBlock = (s: State): string => {
+  const all = [...new Set([...existingProjectFiles(), ...(s.appliedFiles ?? [])])];
+  if (all.length === 0) return "";
+  return (
+    "\n\nExisting project files (modify THESE at their exact paths; never create " +
+    "a duplicate copy of a file under another directory):\n" +
+    all.slice(0, 60).join("\n")
+  );
+};
 
 /**
  * Stream the implementation call when the provider supports it, writing each
@@ -167,7 +187,7 @@ export function makeFastPatchNode({ provider, emit }: NodeDeps) {
       {
         role: "user",
         content:
-          `Request:\n${state.currentRequest}${businessContextBlock(state)}${feedback}${testFeedback}` +
+          `Request:\n${state.currentRequest}${businessContextBlock(state)}${layoutBlock(state)}${feedback}${testFeedback}` +
           (state.generatedCode ? `\n\nCurrent code:\n${state.generatedCode}` : ""),
       },
     ];
@@ -313,7 +333,8 @@ export function makeImplementNode({ provider, emit }: NodeDeps) {
         content:
           `Abstract graph:\n${JSON.stringify(state.abstractGraph, null, 2)}` +
           `\n\nAdopted proposals:\n${JSON.stringify(state.proposalGraph, null, 2)}` +
-          businessContextBlock(state),
+          businessContextBlock(state) +
+          layoutBlock(state),
       },
     ];
     // Streamed path: files hit disk one by one as the model emits them —
@@ -399,6 +420,68 @@ export function makeTestRunnerNode({ provider, testRunner }: NodeDeps) {
   };
 }
 
+/* ---------------- Documentation (HEAVY_PATH only, separate from code gen) ---------------- */
+
+const DocsResultSchema = z.object({ docs: z.string() });
+
+export function makeDocsNode({ provider }: NodeDeps) {
+  return async (state: State): Promise<Update> => {
+    const result = await provider.invokeJson(
+      [
+        { role: "system", content: DOCS_SYSTEM },
+        {
+          role: "user",
+          content:
+            `Request:\n${state.currentRequest}${businessContextBlock(state)}${layoutBlock(state)}` +
+            `\n\nImplementation notes: time=${state.timeComplexity ?? "-"} space=${state.spaceComplexity ?? "-"}`,
+        },
+      ],
+      DocsResultSchema,
+    );
+    const applied = await writeFileBlocksNow(result.docs);
+    return {
+      appliedFiles: applied.written,
+      trace: ["[docs] wrote project documentation", ...applied.lines],
+    };
+  };
+}
+
+/* ---------------- Visual critique & loop (multimodal models only) ---------------- */
+
+const VisualCritiqueSchema = z.object({
+  ok: z.boolean(),
+  issues: z.string(),
+});
+
+export function makeVisualNode({ provider }: NodeDeps) {
+  return async (state: State): Promise<Update> => {
+    if (!provider.invokeVision || !state.generatedCode) {
+      return { trace: ["[visual] skipped (no multimodal provider or no code)"] };
+    }
+    const target = detectVisualTarget(state.generatedCode, state.currentRequest);
+    if (!target) return { trace: ["[visual] skipped (no UI detected)"] };
+
+    const shot = await captureScreenshot(target, state.generatedCode);
+    if (!shot) return { trace: ["[visual] screenshot capture skipped or unsupported"] };
+
+    try {
+      const raw = await provider.invokeVision(VISUAL_CRITIQUE_SYSTEM, shot);
+      const critique = VisualCritiqueSchema.parse(JSON.parse(extractJson(raw)));
+      if (critique.ok || !critique.issues) {
+        return { trace: ["[visual] UI critique passed"] };
+      }
+      return {
+        currentRequest:
+          `${state.currentRequest}\n\n[Visual UI Fix Needed]\n` +
+          `A screenshot revealed the following visual/layout issues: ${critique.issues}. Fix them.`,
+        trace: [`[visual] UI issues found: ${critique.issues}`],
+      };
+    } catch (err) {
+      return { trace: [`[visual] critique failed: ${(err as Error).message}`] };
+    }
+  };
+}
+
 /* ---------------- Egress: localize final output ---------------- */
 
 /** Normalize a user-supplied locale/country code into a concrete target. */
@@ -467,12 +550,21 @@ export function routeAfterPreFlight(
   return state.selectedPath === "FAST_PATH" ? "fast_patch" : "decompose";
 }
 
-export function routeAfterTests(state: State): "fast_patch" | "decompose" | "finalize" {
-  if (state.currentTestCoverage >= state.targetTestCoverage) return "finalize";
+export function routeAfterTests(
+  state: State,
+): "fast_patch" | "decompose" | "visual" | "docs" | "finalize" {
+  if (state.currentTestCoverage >= state.targetTestCoverage) {
+    // Check visual quality if visual node is supported and applicable
+    return "visual";
+  }
   // No way to measure progress (missing toolchain/language) — re-patching
   // blind only wastes iterations; finalize with what we have.
   if (state.testUnevaluable) return "finalize";
   if (state.iterationCount >= state.maxIterations) return "finalize";
   return state.selectedPath === "FAST_PATH" ? "fast_patch" : "decompose";
+}
+
+export function routeAfterVisual(state: State): "docs" | "finalize" {
+  return state.selectedPath === "HEAVY_PATH" ? "docs" : "finalize";
 }
 

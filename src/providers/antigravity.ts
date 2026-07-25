@@ -317,6 +317,38 @@ export class AntigravityStrategy extends BaseProviderStrategy {
     throw lastError;
   }
 
+  async invokeVision(prompt: string, imagePath: string): Promise<string> {
+    const data = readFileSync(imagePath).toString("base64");
+    const token = await ensureToken();
+    const res = await fetch(`${CLOUD_CODE}/v1internal:streamGenerateContent?alt=sse`, {
+      method: "POST",
+      headers: this.headers(token),
+      body: JSON.stringify({
+        project: await this.resolveProject(token),
+        model: await this.modelCandidates(token).then((c) => c[0]),
+        request: {
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: prompt }, { inlineData: { mimeType: "image/png", data } }],
+            },
+          ],
+        },
+        requestType: "agent",
+        userAgent: "antigravity",
+        requestId: `agent-${randomUUID()}`,
+      }),
+    });
+    if (!res.ok) {
+      const detail = (await res.text()).slice(0, 300);
+      throw new Error(`cloudcode vision HTTP ${res.status}: ${detail}`);
+    }
+    let text = "";
+    for await (const delta of this.consume(res)) text += delta;
+    if (!text) throw new Error("empty vision response from cloudcode");
+    return text;
+  }
+
   async invoke(messages: ChatMessage[], opts?: InvokeOptions): Promise<string> {
     let text = "";
     for await (const delta of this.stream(messages, opts)) text += delta;

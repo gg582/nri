@@ -9,13 +9,15 @@
  * all at once at the end.
  */
 
+import { FILE_MARKER_PATTERN } from "./apply.js";
+
 export interface StreamedFile {
   path: string;
   content: string;
 }
 
-/** Same marker shape as apply.ts parseFileBlocks' bare-section regex. */
-const MARKER = /^(?:\/\/|#)\s+((?:[\w.-]+\/)+[\w.-]+\.\w+)\s*$/;
+/** Same marker shape as apply.ts (single source: FILE_MARKER_PATTERN). */
+const MARKER = new RegExp(`^(?:\\/\\/|#)\\s+(${FILE_MARKER_PATTERN})\\s*$`);
 
 export class IncrementalFileParser {
   private phase: "find" | "code" | "done" = "find";

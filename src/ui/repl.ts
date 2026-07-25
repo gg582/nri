@@ -3,6 +3,7 @@ import { makeProviderResolver } from "../providers/resolver.js";
 import { createTestRunner } from "../tools/factory.js";
 import type { AgentStateType } from "../state.js";
 import { loadConfig } from "../config.js";
+import { cleanupVisualTemps } from "../tools/visual.js";
 
 /** Capture everything a legacy command writes to stdout into log lines. */
 export async function capture(fn: () => Promise<void> | void): Promise<string[]> {
@@ -35,6 +36,7 @@ export const HELP_LINES = [
   "  /memory list|search|ingest|stats|backend <jsonl|rag>",
   "  /help                            this text",
   "  /exit                            quit (also: /quit)",
+  "keys: ↑/↓·PgUp/PgDn scroll log · ^↑/^↓ top/bottom · ←/→ browse prompt history (Enter re-submits)",
   "",
   "plain text (no slash) runs the nri pipeline on it.",
   "after a run, detected changes are offered for apply: y = apply, n = skip.",
@@ -63,12 +65,18 @@ export class Repl {
   private pendingConfirm: ((ok: boolean) => void) | null = null;
   private readonly queue: string[] = [];
   private pumping = false;
+  /** Submitted pipeline prompts, newest first (for ←/→ history browsing). */
+  private readonly promptHistory: string[] = [];
 
   constructor(
     private readonly push: (...lines: string[]) => void,
     private readonly onExit: () => void,
     private readonly onBusyChange?: (busy: boolean) => void,
   ) {}
+
+  get history(): readonly string[] {
+    return this.promptHistory;
+  }
 
   private setBusy(busy: boolean): void {
     this.busy = busy;
@@ -407,6 +415,7 @@ export class Repl {
       return;
     }
     // Pipeline requests queue up and run one after another.
+    if (this.promptHistory[0] !== trimmed) this.promptHistory.unshift(trimmed);
     this.queue.push(trimmed);
     if (this.pumping) this.push(`queued (#${this.queue.length})`);
     void this.pump();
@@ -427,6 +436,9 @@ export async function runReadlineRepl(initialRequest?: string): Promise<void> {
   if (initialRequest) await repl.submit(initialRequest);
   for await (const line of rl) {
     await repl.submit(line);
-    if (repl.busy === false && line.trim().match(/^\/(exit|quit)$/)) break;
+    if (repl.busy === false && line.trim().match(/^\/(exit|quit)$/)) {
+      await cleanupVisualTemps();
+      break;
+    }
   }
 }

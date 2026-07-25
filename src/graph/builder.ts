@@ -6,6 +6,7 @@ import {
   makeAbstractGraphNode,
   makeBusinessContextNode,
   makeDecomposeNode,
+  makeDocsNode,
   makeEvaluationNode,
   makeFastPatchNode,
   makeFinalizeNode,
@@ -15,9 +16,11 @@ import {
   makeProposalNode,
   makeTestRunnerNode,
   makeTriageNode,
+  makeVisualNode,
   routeAfterPreFlight,
   routeAfterTests,
   routeAfterTriage,
+  routeAfterVisual,
   type NodeDeps,
 } from "./nodes.js";
 
@@ -92,6 +95,8 @@ export function buildGraph(deps: GraphDeps, opts?: BuildGraphOptions) {
     .addNode("implement", wrap("implement", makeImplementNode(forNode("implement"))))
     .addNode("evaluate", wrap("evaluate", makeEvaluationNode(forNode("evaluate"))))
     .addNode("test_runner", wrap("test_runner", makeTestRunnerNode(forNode("test_writer"))))
+    .addNode("visual", wrap("visual", makeVisualNode(forNode("fast_patch"))))
+    .addNode("docs", wrap("docs", makeDocsNode(forNode("test_writer"))))
     .addNode("finalize", wrap("finalize", makeFinalizeNode(forNode("finalize"))))
     .addEdge(START, "normalize")
     .addEdge("normalize", "triage")
@@ -117,8 +122,15 @@ export function buildGraph(deps: GraphDeps, opts?: BuildGraphOptions) {
     .addConditionalEdges("test_runner", routeAfterTests, {
       fast_patch: "fast_patch",
       decompose: "decompose",
+      visual: "visual",
+      docs: "docs",
       finalize: "finalize",
     })
+    .addConditionalEdges("visual", routeAfterVisual, {
+      docs: "docs",
+      finalize: "finalize",
+    })
+    .addEdge("docs", "finalize")
     .addEdge("finalize", END);
 
   const checkpointer = new MemorySaver();

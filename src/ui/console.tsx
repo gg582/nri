@@ -101,6 +101,8 @@ export function Console({ initialRequest }: { initialRequest?: string }) {
   const [busy, setBusy] = useState(false);
   /** First visible row index; null = pinned to the bottom (follow new output). */
   const [anchor, setAnchor] = useState<number | null>(null);
+  /** Prompt-history browse position (index into repl.history); null = off. */
+  const [browseIdx, setBrowseIdx] = useState<number | null>(null);
 
   const width = Math.min(stdout?.columns ?? 80, 100);
   // chrome: header 3 + status 2 + input 3 + slack 1
@@ -116,9 +118,32 @@ export function Console({ initialRequest }: { initialRequest?: string }) {
   const visible = rows.slice(first, first + viewRows);
   const below = Math.max(0, rows.length - (first + viewRows));
 
+  const repl = useMemo(
+    () =>
+      new Repl(
+        (...newLines) => setLines((prev) => [...prev, ...newLines]),
+        () => exit(),
+        (b) => setBusy(b),
+      ),
+    [exit],
+  );
+
   // In-app scrolling: ↑/↓ line-wise, PgUp/PgDn page-wise, ^↑ top, ^↓ bottom.
   // Scrolling all the way back down re-pins the view to the bottom.
-  useInput((_input, key) => {
+  // ←/→ with an empty input (or mid-browse) walks the prompt history;
+  // Enter submits the recalled prompt like any other input.
+  useInput((inputKey, key) => {
+    const browsing = browseIdx !== null || input === "";
+    if ((key.leftArrow || key.rightArrow) && browsing) {
+      const hist = repl.history;
+      if (hist.length === 0) return;
+      setBrowseIdx((prev) => {
+        const next = Math.max(-1, Math.min(hist.length - 1, (prev ?? -1) + (key.leftArrow ? 1 : -1)));
+        setInput(next === -1 ? "" : hist[next]);
+        return next === -1 ? null : next;
+      });
+      return;
+    }
     if (key.ctrl && key.upArrow) {
       setAnchor(0);
     } else if (key.ctrl && key.downArrow) {
@@ -135,18 +160,9 @@ export function Console({ initialRequest }: { initialRequest?: string }) {
     }
   });
 
-  const repl = useMemo(
-    () =>
-      new Repl(
-        (...newLines) => setLines((prev) => [...prev, ...newLines]),
-        () => exit(),
-        (b) => setBusy(b),
-      ),
-    [exit],
-  );
-
   async function onSubmit(text: string): Promise<void> {
     setInput("");
+    setBrowseIdx(null);
     // A new submission re-pins the view so its output is always visible.
     setAnchor(null);
     await repl.submit(text);
@@ -175,7 +191,15 @@ export function Console({ initialRequest }: { initialRequest?: string }) {
       {/* input: kimi-code style rounded card */}
       <Box borderStyle="round" borderColor={busy ? theme.dim : theme.control} paddingX={1}>
         <Text color={theme.prompt}>{busy ? "… " : "❯ "}</Text>
-        <TextInput value={input} onChange={setInput} onSubmit={(v) => void onSubmit(v)} />
+        <TextInput
+          value={input}
+          onChange={(v) => {
+            setInput(v);
+            // Any real edit drops out of history-browse mode.
+            if (browseIdx !== null) setBrowseIdx(null);
+          }}
+          onSubmit={(v) => void onSubmit(v)}
+        />
       </Box>
     </Box>
   );

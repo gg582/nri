@@ -397,16 +397,44 @@ export function makeEvaluationNode({ provider }: NodeDeps) {
 
 /* ---------------- Test runner & coverage ---------------- */
 
+const TestSpecSchema = z.object({
+  test_code: z.string(),
+  run_command: z.string().optional().nullable(),
+  coverage_regex: z.string().optional().nullable(),
+});
+
 export function makeTestRunnerNode({ provider, testRunner }: NodeDeps) {
   return async (state: State): Promise<Update> => {
-    const tests = await provider.invoke([
-      { role: "system", content: TEST_WRITER_SYSTEM },
-      {
-        role: "user",
-        content: `Implementation:\n${state.generatedCode}${businessContextBlock(state)}`,
-      },
-    ]);
-    const result = await testRunner.run(state.generatedCode ?? "", tests, state.iterationCount + 1);
+    let testInput: string | { testCode: string; runCommand?: string; coverageRegex?: string | null } = "";
+    try {
+      const spec = await provider.invokeJson(
+        [
+          { role: "system", content: TEST_WRITER_SYSTEM },
+          {
+            role: "user",
+            content: `Implementation:\n${state.generatedCode}${businessContextBlock(state)}`,
+          },
+        ],
+        TestSpecSchema,
+      );
+      testInput = {
+        testCode: spec.test_code,
+        runCommand: spec.run_command ?? undefined,
+        coverageRegex: spec.coverage_regex ?? undefined,
+      };
+    } catch {
+      // Fallback if LLM responded with raw text test code
+      const raw = await provider.invoke([
+        { role: "system", content: TEST_WRITER_SYSTEM },
+        {
+          role: "user",
+          content: `Implementation:\n${state.generatedCode}${businessContextBlock(state)}`,
+        },
+      ]);
+      testInput = raw;
+    }
+
+    const result = await testRunner.run(state.generatedCode ?? "", testInput, state.iterationCount + 1);
     return {
       currentTestCoverage: result.coverage,
       iterationCount: state.iterationCount + 1,

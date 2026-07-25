@@ -199,7 +199,10 @@ export class Repl {
             : "pipeline ended before finalize";
       this.push(`run ended without completing: ${reason}`);
     }
-    this.push(`done: coverage ${s.currentTestCoverage}%/${s.targetTestCoverage}% (${s.selectedPath})`);
+    this.push(
+      "",
+      `✔ pipeline finished (${s.selectedPath}): coverage ${s.currentTestCoverage}%/${s.targetTestCoverage}%`,
+    );
     const { saveRun } = await import("../store/memory.js");
     await saveRun({
       request,
@@ -211,13 +214,12 @@ export class Repl {
     });
     if (s.generatedCode) {
       const { offerApply, planApply } = await import("../tools/apply.js");
-      // Nodes already write file blocks as they are produced; only run the
-      // end-of-run gate for content that never hit disk (e.g. diffs).
       const plan = planApply(s.generatedCode);
       const already = new Set(s.appliedFiles ?? []);
       const pending = plan.changes.filter((c) => !already.has(c.path));
       if (plan.changes.length > 0 && pending.length === 0) {
-        this.push(`all ${plan.changes.length} file(s) already written during the run.`);
+        const fileList = plan.changes.map((c) => `  - ${c.path}`).join("\n");
+        this.push(`files written to workspace (${plan.changes.length}):\n${fileList}`);
       } else {
         this.push(...(await offerApply(s.generatedCode, (q) => this.askConfirm(q), { provider: makeProviderResolver({})("evaluate") })));
       }

@@ -186,9 +186,18 @@ Respond with ONLY valid JSON:
   "rationale": string
 }`;
 
-export const TEST_WRITER_SYSTEM = `You are the Test Generation Engine.
-Write focused unit tests for the provided implementation. Cover the business constraints listed.
-Respond with ONLY the test code, no prose.`;
+export const TEST_WRITER_SYSTEM = `You are the Test & Verification Engine.
+Analyze the implementation and project structure, then:
+1. Provide appropriate unit tests or test code for the project.
+2. Specify the exact bash shell command to build and run the tests in the workspace directory.
+3. Specify a regex pattern or strategy to extract statement/test coverage percentage from the command output (or null if pass/fail implies 100/0).
+
+Respond with ONLY valid JSON:
+{
+  "test_code": string,          // test files as file blocks or source code
+  "run_command": string,        // e.g. "pytest", "cmake -S . -B build && ctest --test-dir build", "go test -cover ./..."
+  "coverage_regex": string | null  // regex pattern with a capture group for percentage, or null
+}`;
 
 export const COMPACT_SYSTEM = `You are the Context Compaction Engine.
 Compress the provided execution trace and free-text artifacts into a dense summary

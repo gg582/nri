@@ -24,17 +24,27 @@ export function parseCoverage(output: string): number | null {
   const patterns = [
     /All files\s*\|[^|]*\|[^|]*\|[^|]*\|\s*([\d.]+)/i, // istanbul table
     /coverage[:\s]+([\d.]+)\s*%/i,
-    /([\d.]+)\s*%\s*(?:coverage|statements)/i,
+    /([\d.]+)\s*%\s*(?:coverage|statements|tests passed)/i, // istanbul, ctest
+    /PASSED\s*\(([\d.]+)\s*%\)/i,
   ];
   for (const re of patterns) {
     const m = output.match(re);
     if (m) return Number.parseFloat(m[1]);
   }
+  if (/100%\s*tests passed|ALL PASSED|\[\s*PASSED\s*\]/i.test(output)) {
+    return 100;
+  }
   return null;
 }
 
+export interface TestSpec {
+  testCode: string;
+  runCommand?: string;
+  coverageRegex?: string | null;
+}
+
 export interface TestRunner {
-  run(code: string, tests: string, iteration: number): Promise<TestRunResult>;
+  run(code: string, testSpec: string | TestSpec, iteration: number): Promise<TestRunResult>;
 }
 
 type Lang = "python" | "cpp" | "ts" | "js" | "unknown";
@@ -126,7 +136,11 @@ export class ShellTestRunner implements TestRunner {
     return { coverage: coverage ?? 0, passed: false, output };
   }
 
-  async run(code: string, tests: string, iteration: number): Promise<TestRunResult> {
+  async run(code: string, testInput: string | TestSpec, iteration: number): Promise<TestRunResult> {
+    const spec: TestSpec =
+      typeof testInput === "string" ? { testCode: testInput } : testInput;
+    const tests = spec.testCode;
+
     const dir = join(this.workspace, `iter-${iteration}`);
     await mkdir(dir, { recursive: true });
     if (this.command) return this.runLegacy(dir, code, tests);
@@ -139,17 +153,48 @@ export class ShellTestRunner implements TestRunner {
       await writeFile(dest, c.content, "utf8");
     }
 
+    // Materialize test code files if returned as file blocks or single file
+    if (tests) {
+      const testPlan = planApply(tests);
+      const testChanges = testPlan.changes.length > 0 ? testPlan.changes : [{ path: "test_runner_generated", kind: "full-file" as const, content: stripCodeFence(tests) }];
+      for (const tc of testChanges) {
+        const dest = join(dir, tc.path);
+        await mkdir(dirname(dest), { recursive: true });
+        await writeFile(dest, tc.content, "utf8");
+      }
+    }
+
+    // AI-Driven Dynamic Execution: if AI provided a runCommand, execute it directly
+    if (spec.runCommand) {
+      const res = await this.exec(spec.runCommand, dir);
+      let coverage = parseCoverage(res.output);
+      if (coverage === null && spec.coverageRegex) {
+        try {
+          const match = res.output.match(new RegExp(spec.coverageRegex, "i"));
+          if (match && match[1]) coverage = Number.parseFloat(match[1]);
+        } catch {
+          /* invalid user regex ignored */
+        }
+      }
+      if (res.code === 0) {
+        return {
+          coverage: coverage ?? 100,
+          passed: true,
+          output: `AI command passed (${spec.runCommand})\n${res.output}`,
+        };
+      }
+      if (isInfraFailure(res.code, res.output)) {
+        return { coverage: coverage ?? 0, passed: false, output: res.output, unevaluable: true };
+      }
+      return { coverage: coverage ?? 0, passed: false, output: res.output };
+    }
+
     const lang = detectLang(changes);
     switch (lang) {
       case "python":
         return this.verifyPython(dir, changes, tests);
-      case "cpp": {
-        // Prefer translation units; fall back to headers when that's all there is.
-        const isHeader = (p: string) => ["h", "hpp"].includes(extOf(p));
-        const sources = changes.filter((c) => CPP_EXTS.has(extOf(c.path)) && !isHeader(c.path));
-        const targets = sources.length > 0 ? sources : changes.filter((c) => CPP_EXTS.has(extOf(c.path)));
-        return this.verifyCompile(dir, "g++ -fsyntax-only", targets, [...CPP_EXTS]);
-      }
+      case "cpp":
+        return this.verifyCpp(dir, changes, tests);
       case "ts":
         return this.verifyCompile(dir, "npx --yes tsc --noEmit --skipLibCheck", changes, ["ts", "tsx"]);
       case "js":
@@ -181,6 +226,49 @@ export class ShellTestRunner implements TestRunner {
       // pytest unavailable — fall through to a syntax check.
     }
     return this.verifyCompile(dir, "python3 -m py_compile", changes, ["py"]);
+  }
+
+  private async verifyCpp(dir: string, changes: FileChange[], tests: string): Promise<TestRunResult> {
+    const isHeader = (p: string) => ["h", "hpp"].includes(extOf(p));
+    const sources = changes.filter((c) => CPP_EXTS.has(extOf(c.path)) && !isHeader(c.path));
+    const targets = sources.length > 0 ? sources : changes.filter((c) => CPP_EXTS.has(extOf(c.path)));
+
+    // Try CMake build & test execution if CMakeLists.txt exists
+    if (changes.some((c) => c.path === "CMakeLists.txt")) {
+      const buildRes = await this.exec("cmake -S . -B build && cmake --build build -j4", dir);
+      if (buildRes.code !== 0) {
+        return isInfraFailure(buildRes.code, buildRes.output)
+          ? { coverage: 0, passed: false, output: buildRes.output, unevaluable: true }
+          : { coverage: 0, passed: false, output: buildRes.output };
+      }
+      const ctestRes = await this.exec("ctest --test-dir build --output-on-failure", dir);
+      const parsedCov = parseCoverage(ctestRes.output);
+      if (ctestRes.code === 0) {
+        return {
+          coverage: parsedCov ?? 100,
+          passed: true,
+          output: `ctest passed\n${ctestRes.output}`,
+        };
+      }
+      return { coverage: parsedCov ?? 0, passed: false, output: ctestRes.output };
+    }
+
+    // Direct test runner compile if standalone test code was written
+    if (tests && /main\s*\(/.test(tests)) {
+      await writeFile(join(dir, "test_runner.cpp"), stripCodeFence(tests), "utf8");
+      const srcFiles = targets.map((f) => JSON.stringify(f.path)).join(" ");
+      const compileRes = await this.exec(`g++ -std=c++17 ${srcFiles} test_runner.cpp -Iinclude -Isrc -o test_runner`, dir);
+      if (compileRes.code === 0) {
+        const runRes = await this.exec("./test_runner", dir);
+        const parsedCov = parseCoverage(runRes.output);
+        return runRes.code === 0
+          ? { coverage: parsedCov ?? 100, passed: true, output: runRes.output }
+          : { coverage: parsedCov ?? 0, passed: false, output: runRes.output };
+      }
+    }
+
+    // Fallback: g++ syntax check
+    return this.verifyCompile(dir, "g++ -fsyntax-only -Iinclude -Isrc", targets, [...CPP_EXTS]);
   }
 
   private async verifyCompile(

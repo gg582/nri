@@ -1,4 +1,6 @@
-# nri
+# nri [ˈɛnɹi]
+
+![Logo](./logo.png)
 
 **Adaptive agentic-engineering harness** — a LangGraph-based agent that routes
 each request through a triage layer into a lightweight **FAST_PATH** patch loop

@@ -1,6 +1,8 @@
 import { loadConfig } from "../config.js";
 import type { LLMProviderStrategy } from "./base.js";
+import { AntigravityStrategy, antigravityAvailable } from "./antigravity.js";
 import { CodexStrategy, codexAuthAvailable } from "./codex.js";
+import { KimiCodeStrategy, kimiCodeCredAvailable } from "./kimiCode.js";
 import {
   ClaudeStrategy,
   DeepSeekStrategy,
@@ -42,8 +44,18 @@ const registry: Record<ProviderName, (opts: StrategyOptions) => LLMProviderStrat
     o.apiKey || o.auth !== "codex-oauth" || !codexAuthAvailable()
       ? new OpenAIStrategy(o)
       : new CodexStrategy(o),
-  gemini: (o) => new GeminiStrategy(o),
-  kimi: (o) => new KimiStrategy(o),
+  // Gemini via antigravity oauth (imported): uses the agy CLI's Code Assist
+  // quota, not the Gemini API-key quota.
+  gemini: (o) =>
+    o.auth === "antigravity-oauth" && antigravityAvailable()
+      ? new AntigravityStrategy(o)
+      : new GeminiStrategy(o),
+  // Kimi via kimi-code oauth: re-reads the CLI's credential file per call
+  // and refreshes on 401, instead of a stale import-time snapshot.
+  kimi: (o) =>
+    o.auth === "kimi-code-oauth" && kimiCodeCredAvailable()
+      ? new KimiCodeStrategy(o)
+      : new KimiStrategy(o),
   deepseek: (o) => new DeepSeekStrategy(o),
   grok: (o) => new GrokStrategy(o),
   claude: (o) => new ClaudeStrategy(o),
@@ -79,7 +91,9 @@ export function availableProviders(): ProviderName[] {
     (name) =>
       ENV_KEYS[name].some((k) => process.env[k]) ||
       stored[name]?.apiKey ||
-      (stored[name]?.auth === "codex-oauth" && codexAuthAvailable()),
+      (stored[name]?.auth === "codex-oauth" && codexAuthAvailable()) ||
+      (stored[name]?.auth === "kimi-code-oauth" && kimiCodeCredAvailable()) ||
+      (stored[name]?.auth === "antigravity-oauth" && antigravityAvailable()),
   );
 }
 

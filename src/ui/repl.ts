@@ -22,7 +22,7 @@ export async function capture(fn: () => Promise<void> | void): Promise<string[]>
 
 export const HELP_LINES = [
   "slash commands (mirrors of the CLI subcommands):",
-  "  /provider list|import [kimi-code|codex]|add [n]|remove <n>|refresh [n]",
+  "  /provider list|import [kimi-code|codex|antigravity]|add [n]|remove <n>|refresh [n]",
   "  /model list|assign|set <node|default> <provider:model> [more...]|reorder [node]|candidates",
   "  /permission list|set-mode <plan|auto|yolo>|allow <re>|deny <re>|clear <allow|deny>",
   "  /yolo [off]                       toggle yolo mode (gates off, advisory only)",

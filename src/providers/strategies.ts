@@ -78,7 +78,7 @@ export class OpenAICompatibleStrategy extends BaseProviderStrategy {
   readonly name: string;
   readonly model: string;
   private readonly droppedParams = new Set<string>();
-  private readonly args: {
+  protected readonly args: {
     name: string;
     model: string;
     apiKey: string;

@@ -26,7 +26,7 @@ interface ImportResult {
 function importKimiCode(): ImportResult[] {
   const tomlPath = join(homedir(), ".kimi-code", "config.toml");
   const credPath = join(homedir(), ".kimi-code", "credentials", "kimi-code.json");
-  if (!existsSync(tomlPath)) return [];
+  if (!existsSync(tomlPath) || !existsSync(credPath)) return [];
 
   const toml = readFileSync(tomlPath, "utf8");
   // Parse the [providers.*] section specifically — the first base_url in the
@@ -37,26 +37,37 @@ function importKimiCode(): ImportResult[] {
     (m) => m[1],
   );
 
-  let apiKey: string | undefined;
-  let note = "imported from kimi-code";
-  if (existsSync(credPath)) {
-    try {
-      const cred = JSON.parse(readFileSync(credPath, "utf8")) as {
-        access_token?: string;
-        expires_at?: number;
-      };
-      apiKey = cred.access_token;
-      const expiry = cred.expires_at ? new Date(cred.expires_at * 1000).toISOString() : "unknown";
-      note += ` (oauth access_token, expires ${expiry} — re-import after refresh)`;
-    } catch {
-      note += " (credentials unreadable — set api key manually)";
-    }
-  }
+  // No apiKey is stored: oauth tokens live in ~/.kimi-code and are re-read
+  // per call (and refreshed on 401) by KimiCodeStrategy.
   return [
     {
       provider: "kimi",
       source: "kimi-code",
-      config: { apiKey, baseURL, defaultModel: models[0], models, note },
+      config: {
+        auth: "kimi-code-oauth",
+        baseURL,
+        defaultModel: models[0],
+        models,
+        note: "imported from kimi-code (oauth; tokens re-read from ~/.kimi-code per call)",
+      },
+    },
+  ];
+}
+
+/** antigravity: token file presence only — calls mimic the agy CLI (separate quota). */
+function importAntigravity(): ImportResult[] {
+  const tokenPath = join(homedir(), ".gemini", "antigravity-cli", "antigravity-oauth-token");
+  if (!existsSync(tokenPath)) return [];
+  const existing = loadConfig().providers?.gemini ?? {};
+  return [
+    {
+      provider: "gemini",
+      source: "antigravity",
+      config: {
+        auth: "antigravity-oauth",
+        defaultModel: existing.defaultModel ?? "gemini-3-flash",
+        note: "imported from antigravity (oauth; agy CLI mimicry — separate from API-key quota)",
+      },
     },
   ];
 }
@@ -100,6 +111,7 @@ function importCodex(): ImportResult[] {
 const IMPORTERS: Record<string, () => ImportResult[]> = {
   "kimi-code": importKimiCode,
   codex: importCodex,
+  antigravity: importAntigravity,
   // claude-code and gemini-cli store oauth tokens in OS-specific vaults with
   // no plain API key — importing them is out of scope; use env keys instead.
 };

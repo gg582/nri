@@ -115,7 +115,7 @@ Options (one-shot mode):
 
 Commands:
   nri provider list                       configured providers (* = credentials available)
-  nri provider import [kimi-code|codex]   auto-import credentials from existing AI clients
+  nri provider import [kimi-code|codex|antigravity]   auto-import credentials from existing AI clients
   nri provider add [name]                 manual interactive entry
   nri provider remove <name>              remove stored credentials
   nri provider refresh [name]             fetch live model lists from provider APIs

@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join, normalize } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig } from "../config.js";
 import { checkPermission } from "./permissions.js";
-import { buildChangeMesh, summarizeChangeMesh } from "./changeMesh.js";
+import { buildChangeMesh, interpretChangeMesh, summarizeChangeMesh } from "./changeMesh.js";
 
 const execAsync = promisify(exec);
 
@@ -211,7 +211,14 @@ export async function offerApply(
   const mode = opts?.yolo ? "yolo" : (loadConfig().permissions?.mode ?? "auto");
   const summary = [
     `detected ${plan.format}: ${plan.changes.length} file(s)`,
-    ...summarizeChangeMesh(buildChangeMesh(plan)),
+    ...(() => {
+      const mesh = buildChangeMesh(plan);
+      const interpretation = interpretChangeMesh(mesh);
+      return [
+        ...summarizeChangeMesh(mesh),
+        `graph interpretation: ${interpretation.kind}; +${interpretation.plusWeight}/-${interpretation.minusWeight}; clusters=${interpretation.clusters.length}; max-distance=${interpretation.maxDistance}`,
+      ];
+    })(),
     ...summarizePlan(plan),
     ...refined.report,
   ];

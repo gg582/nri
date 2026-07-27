@@ -25,12 +25,13 @@ pipeline instead:
 
 - **Right-sized rigor** — a Step-0 triage scores each request
   (`is_bugfix`, `codebase_impact_ratio`) and sends small fixes down a cheap
-  FAST loop and architectural work down the full 14-step HEAVY loop. You don't
-  pay tree-of-thought prices for a one-line patch.
-- **Business logic is a first-class gate** — a contextualization node extracts
-  domain constraints and impacted flows up front, and a **pre-flight auditor**
-  simulates the plan against them *before* any code is committed. Patches that
-  merely chase coverage numbers while breaking domain rules are rejected.
+  FAST loop (patch → verify) and architectural work down the full HEAVY loop.
+  You don't pay tree-of-thought prices for a one-line patch.
+- **Business logic is a first-class gate** — on the HEAVY path, a
+  contextualization node extracts domain constraints and impacted flows up
+  front, and a **pre-flight auditor** simulates the plan against them *before*
+  any code is committed. Patches that merely chase coverage numbers while
+  breaking domain rules are rejected.
 - **Abstract-graph planning** — task trees are clustered into primal nodes
   with I/O contracts; cycles are detected and linearized before detailed
   planning. Cheaper tokens, no runaway loops.
@@ -82,19 +83,27 @@ tool, or set `NRI_TEST_COMMAND` (default `npm test -- --coverage`).
 
 ```
 raw request
-  └─ normalize        raw (any language) -> controlled, machine-friendly English
+  └─ normalize        non-Latin scripts -> controlled English (English requests skip the call)
   └─ triage           { is_bugfix, codebase_impact_ratio } -> FAST_PATH | HEAVY_PATH
-  └─ business_context domain constraints & impacted flows (both paths)
 
-FAST   fast_patch ──► pre_flight ──valid──► test_runner
-HEAVY  decompose ──► abstract_graph ──► proposal ──► human_approval (HITL)
-            ▲                                       │
-            └──── synthesis question ◄── evaluate ◄─ implement ◄─ pre_flight
-                                invalid → re-plan (≤3)
-test_runner ── coverage ≥ target ? ──► finalize ──► END
+FAST   fast_patch ────────────────────────────────────────────► test_runner
+HEAVY  business_context ──► decompose ──► abstract_graph ──► proposal
+              ▲                            ──► human_approval (HITL) ──► pre_flight
+              │                                                     valid │
+              └──── synthesis question ◄── evaluate ◄─ implement ◄────────┘
+                                            invalid → re-plan (≤3)
+test_runner ── coverage ≥ target ? ──► visual? ──► docs? ──► finalize ──► END
                      └ no ──► loop (fast_patch | decompose)
-finalize          localized final output (--locale / NRI_LOCALE / config)
+finalize          localized final output (--locale / NRI_LOCALE / config);
+                  English locales skip the egress call
 ```
+
+Token discipline is deliberate: English requests skip normalization, FAST
+skips the business-context/pre-flight chain (reserved for HEAVY work), the
+test spec is generated once per run (not per iteration), docs are generated
+only when the request asks for them, and implementation prompts are grounded
+in the *current contents* of the files the request refers to — the model
+patches real code instead of hallucinating against a file-name list.
 
 ## Commands
 
@@ -107,7 +116,7 @@ inside `nri tui`.
 | `nri model list/assign/set/candidates` | per-node model routing by capability tier |
 | `nri permission list/set-mode/allow/deny/clear` | execution policy: `plan` / `auto` / `yolo` + regex lists |
 | `nri plan "<request>"` | read-only plan; stops before implement/test |
-| `nri goal set/status/run/clear` | durable objective + completion criterion + budget |
+| `nri goal set/status/run/clear` | durable objective + completion criterion + budget; runs offer best-effort changes even when the criterion is missed |
 | `nri swarm [--providers a,b] "<request>"` | same request across providers, side-by-side |
 | `nri compact <state.json>` | fold run context into a dense summary |
 | `nri graph-compact <state.json>` | same, preserving graph node ids/edges (validated) |

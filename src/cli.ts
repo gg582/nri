@@ -309,6 +309,14 @@ async function main(): Promise<void> {
   stdout.write("\n=== generated code ===\n");
   stdout.write((final.generatedCode ?? "(none)") + "\n");
 
+  const goalMet = final.currentTestCoverage >= final.targetTestCoverage;
+  if (!goalMet) {
+    stdout.write(
+      `\ngoal not met: coverage ${final.currentTestCoverage}% < target ${final.targetTestCoverage}%.` +
+        (final.generatedCode ? " Best-effort changes can still be applied below.\n" : "\n"),
+    );
+  }
+
   if (final.generatedCode) {
     const { offerApply, planApply } = await import("./tools/apply.js");
     // Nodes already write file blocks as they are produced; only run the
@@ -340,7 +348,7 @@ async function main(): Promise<void> {
     summary: final.compactSummary,
   });
 
-  exit(final.currentTestCoverage >= final.targetTestCoverage ? 0 : 3);
+  exit(goalMet ? 0 : 3);
 }
 
 main().catch((err) => {

@@ -45,16 +45,17 @@ export interface GraphDeps {
 /**
  * Pipeline:
  *
- *   triage -> business_context ─┬─ FAST:  fast_patch ─────────────┐
- *                               └─ HEAVY: decompose ->            │
- *                                          abstract_graph ->      │
- *                                          proposal ->            │
- *                                          human_approval ->      │
- *                                         pre_flight <────────────┘
- *                              valid(fast)  -> test_runner
- *                              valid(heavy) -> implement -> evaluate -> test_runner
- *                              invalid      -> re-plan (max 3 attempts)
- *   test_runner -> coverage >= target ? END : loop (fast_patch | decompose)
+ *   triage ─┬─ FAST:  fast_patch ───────────────────────────► test_runner
+ *           └─ HEAVY: business_context -> decompose ->
+ *                     abstract_graph -> proposal -> human_approval ->
+ *                     pre_flight ──valid──► implement -> evaluate -> test_runner
+ *                               invalid -> re-plan (max 3 attempts)
+ *   test_runner -> coverage >= target ? visual -> docs? -> finalize -> END
+ *                  else loop (fast_patch | decompose)
+ *
+ * FAST is deliberately slim (patch -> verify): the business-context and
+ * pre-flight audit chain is reserved for HEAVY work, and documentation is
+ * generated only when the request asks for it.
  */
 export interface BuildGraphOptions {
   /** Extra nodes to interrupt before (in addition to human_approval). */
@@ -108,19 +109,17 @@ export function buildGraph(deps: GraphDeps, opts?: BuildGraphOptions) {
     .addNode("finalize", wrap("finalize", makeFinalizeNode(forNode("finalize"))))
     .addEdge(START, "normalize")
     .addEdge("normalize", "triage")
-    .addEdge("triage", "business_context")
-    .addConditionalEdges("business_context", routeAfterTriage, {
+    .addConditionalEdges("triage", routeAfterTriage, {
       fast_patch: "fast_patch",
-      decompose: "decompose",
+      business_context: "business_context",
     })
-    .addEdge("fast_patch", "pre_flight")
+    .addEdge("business_context", "decompose")
+    .addEdge("fast_patch", "test_runner")
     .addEdge("decompose", "abstract_graph")
     .addEdge("abstract_graph", "proposal")
     .addEdge("proposal", "human_approval")
     .addEdge("human_approval", "pre_flight")
     .addConditionalEdges("pre_flight", routeAfterPreFlight, {
-      fast_patch: "fast_patch",
-      test_runner: "test_runner",
       implement: "implement",
       decompose: "decompose",
       __end__: END,

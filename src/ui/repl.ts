@@ -213,11 +213,16 @@ export class Repl {
           : s.iterationCount >= s.maxIterations
             ? `iteration limit reached (${s.iterationCount}/${s.maxIterations})`
             : "pipeline ended before finalize";
-      this.push(`run ended without completing: ${reason}`);
+      this.push(
+        `run ended without completing: ${reason}` +
+          (s.generatedCode ? " — best-effort changes from this run can still be applied below." : ""),
+      );
     }
+    const met = s.currentTestCoverage >= s.targetTestCoverage;
     this.push(
       "",
-      `✔ pipeline finished (${s.selectedPath}): coverage ${s.currentTestCoverage}%/${s.targetTestCoverage}%`,
+      `${met ? "✔" : "✘"} pipeline finished (${s.selectedPath}): coverage ${s.currentTestCoverage}%/${s.targetTestCoverage}%` +
+        (met ? "" : " — target not met"),
     );
     const { saveRun } = await import("../store/memory.js");
     await saveRun({

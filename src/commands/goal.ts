@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { stdout } from "node:process";
+import { createInterface } from "node:readline/promises";
+import { stdin, stdout } from "node:process";
 import { storePaths } from "../store/paths.js";
 import { buildGraph, resumeNri, runNri } from "../graph/builder.js";
 import { makeProviderResolver } from "../providers/resolver.js";
@@ -8,6 +9,13 @@ import { createTestRunner } from "../tools/factory.js";
 import type { AgentStateType } from "../state.js";
 
 const GOAL_PATH = storePaths().goalFile;
+
+async function confirm(question: string): Promise<boolean> {
+  const rl = createInterface({ input: stdin, output: stdout });
+  const answer = await rl.question(`${question} [y/N] `);
+  rl.close();
+  return answer.trim().toLowerCase() === "y";
+}
 
 export interface GoalRecord {
   objective: string;
@@ -88,6 +96,16 @@ async function run(): Promise<void> {
   });
   for (const line of s.trace) stdout.write(`  ${line}\n`);
   stdout.write(met ? "\ngoal completion criterion MET.\n" : "\ngoal not yet met — see trace above.\n");
+
+  // Best-effort apply: a run that missed its criterion may still have produced
+  // valuable changes — offer them instead of silently discarding the work.
+  if (s.generatedCode) {
+    const { offerApply } = await import("../tools/apply.js");
+    const lines = await offerApply(s.generatedCode, confirm, {
+      provider: makeProviderResolver({})("evaluate"),
+    });
+    for (const line of lines) stdout.write(`${line}\n`);
+  }
 }
 
 /** Entry point for `nri goal ...` / `nri /goal ...`. */

@@ -3,7 +3,7 @@ import { extractJson } from "../providers/base.js";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import type { TestRunner } from "../tools/testRunner.js";
-import { existingProjectFiles } from "../tools/layout.js";
+import { existingProjectFiles, relevantFileContents } from "../tools/layout.js";
 import { IncrementalFileParser, type StreamedFile } from "../tools/streamApply.js";
 import {
   AbstractGraphSchema,
@@ -77,6 +77,19 @@ const layoutBlock = (s: State): string => {
 };
 
 /**
+ * Ground-truth source injection: the current content of the files the request
+ * most likely refers to. Without this the model only sees file NAMES and must
+ * hallucinate the code it edits — the main reason patches miss the real repo.
+ */
+const sourceContextBlock = (s: State): string => {
+  const query = `${s.rawRequest ?? ""}\n${s.currentRequest ?? ""}`;
+  const files = relevantFileContents(query, s.appliedFiles ?? []);
+  if (files.length === 0) return "";
+  const body = files.map((f) => `=== ${f.path} ===\n${f.content}`).join("\n\n");
+  return `\n\nCurrent content of relevant files (ground truth — patch THIS code):\n${body}`;
+};
+
+/**
  * Stream the implementation call when the provider supports it, writing each
  * file block to disk the moment it completes. Returns null when streaming is
  * unavailable or the streamed output fails validation — callers then fall
@@ -112,9 +125,24 @@ async function streamImplementation(
 
 /* ---------------- Ingress: normalize raw request into controlled English ---------------- */
 
+/** Scripts that genuinely need translation into controlled English. Plain
+ * Latin-script requests skip the normalization LLM call entirely.
+ * Ranges: Hangul (Jamo, compat Jamo, syllables), CJK (ext-A, unified),
+ * Hiragana/Katakana, Cyrillic, Arabic, Thai. */
+const NEEDS_TRANSLATION =
+  /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF\u3400-\u4DBF\u4E00-\u9FFF\u3040-\u30FF\u0400-\u04FF\u0600-\u06FF\u0E00-\u0E7F]/;
+
 export function makeNormalizeNode({ provider }: NodeDeps) {
   return async (state: State): Promise<Update> => {
     const raw = state.rawRequest ?? state.currentRequest;
+    if (raw && !NEEDS_TRANSLATION.test(raw)) {
+      return {
+        rawRequest: raw,
+        originalRequest: raw,
+        currentRequest: raw,
+        trace: ["[normalize] skipped (already English)"],
+      };
+    }
     const result = await provider.invokeJson(
       [
         { role: "system", content: NORMALIZE_SYSTEM },
@@ -178,9 +206,6 @@ export function makeBusinessContextNode({ provider }: NodeDeps) {
 
 export function makeFastPatchNode({ provider, emit }: NodeDeps) {
   return async (state: State): Promise<Update> => {
-    const feedback = state.preFlight?.violation_reason
-      ? `\n\nPrevious attempt was rejected by pre-flight audit: ${state.preFlight.violation_reason}\nFix this.`
-      : "";
     const testFeedback = state.lastTestOutput
       ? `\n\nLatest test/verification output:\n${state.lastTestOutput}\nFix the errors above.`
       : "";
@@ -189,7 +214,7 @@ export function makeFastPatchNode({ provider, emit }: NodeDeps) {
       {
         role: "user",
         content:
-          `Request:\n${state.currentRequest}${conversationContextBlock(state)}${businessContextBlock(state)}${layoutBlock(state)}${feedback}${testFeedback}` +
+          `Request:\n${state.currentRequest}${conversationContextBlock(state)}${layoutBlock(state)}${sourceContextBlock(state)}${testFeedback}` +
           (state.generatedCode ? `\n\nCurrent code:\n${state.generatedCode}` : ""),
       },
     ];
@@ -201,7 +226,6 @@ export function makeFastPatchNode({ provider, emit }: NodeDeps) {
       generatedCode: impl.code,
       timeComplexity: impl.time_complexity,
       spaceComplexity: impl.space_complexity,
-      preFlight: null,
       implementationFingerprints: [fingerprint(impl.code)],
       appliedFiles: applied.written,
       trace: [`[fast-patch] applied (${impl.notes})`, ...applied.lines],
@@ -337,7 +361,7 @@ export function makeImplementNode({ provider, emit }: NodeDeps) {
           `Abstract graph:\n${JSON.stringify(state.abstractGraph, null, 2)}` +
           `\n\nAdopted proposals:\n${JSON.stringify(state.proposalGraph, null, 2)}` +
           conversationContextBlock(state) + businessContextBlock(state) +
-          layoutBlock(state),
+          layoutBlock(state) + sourceContextBlock(state),
       },
     ];
     // Streamed path: files hit disk one by one as the model emits them —
@@ -409,39 +433,48 @@ const TestSpecSchema = z.object({
 
 export function makeTestRunnerNode({ provider, testRunner }: NodeDeps) {
   return async (state: State): Promise<Update> => {
-    let testInput: string | { testCode: string; runCommand?: string; coverageRegex?: string | null } = "";
-    try {
-      const spec = await provider.invokeJson(
-        [
+    // The test spec is generated once per run and reused across loop
+    // iterations — regenerating tests every iteration doubles token cost and
+    // moves the target while the patch loop is chasing it.
+    let spec = state.testSpec ?? null;
+    if (!spec) {
+      try {
+        spec = await provider.invokeJson(
+          [
+            { role: "system", content: TEST_WRITER_SYSTEM },
+            {
+              role: "user",
+              content: `Implementation:\n${state.generatedCode}${conversationContextBlock(state)}${businessContextBlock(state)}`,
+            },
+          ],
+          TestSpecSchema,
+        );
+      } catch {
+        // Fallback if LLM responded with raw text test code
+        const raw = await provider.invoke([
           { role: "system", content: TEST_WRITER_SYSTEM },
           {
             role: "user",
             content: `Implementation:\n${state.generatedCode}${conversationContextBlock(state)}${businessContextBlock(state)}`,
           },
-        ],
-        TestSpecSchema,
-      );
-      testInput = {
+        ]);
+        spec = { test_code: raw };
+      }
+    }
+
+    const result = await testRunner.run(
+      state.generatedCode ?? "",
+      {
         testCode: spec.test_code,
         runCommand: spec.run_command ?? undefined,
         coverageRegex: spec.coverage_regex ?? undefined,
-      };
-    } catch {
-      // Fallback if LLM responded with raw text test code
-      const raw = await provider.invoke([
-        { role: "system", content: TEST_WRITER_SYSTEM },
-        {
-          role: "user",
-          content: `Implementation:\n${state.generatedCode}${conversationContextBlock(state)}${businessContextBlock(state)}`,
-        },
-      ]);
-      testInput = raw;
-    }
-
-    const result = await testRunner.run(state.generatedCode ?? "", testInput, state.iterationCount + 1);
+      },
+      state.iterationCount + 1,
+    );
     return {
       currentTestCoverage: result.coverage,
       iterationCount: state.iterationCount + 1,
+      testSpec: spec,
       testUnevaluable: Boolean(result.unevaluable),
       lastTestOutput: result.passed ? "" : result.output.slice(0, 4000),
       trace: [
@@ -458,6 +491,12 @@ const DocsResultSchema = z.object({ docs: z.string() });
 
 export function makeDocsNode({ provider }: NodeDeps) {
   return async (state: State): Promise<Update> => {
+    // Docs are generated only when the request asks for them — previously this
+    // node ran on every HEAVY_PATH run and its output was discarded unused,
+    // which was pure token waste.
+    if (!/\b(docs?|documentation|readme)\b/i.test(state.currentRequest)) {
+      return { trace: ["[docs] skipped (not requested)"] };
+    }
     const result = await provider.invokeJson(
       [
         { role: "system", content: DOCS_SYSTEM },
@@ -471,7 +510,10 @@ export function makeDocsNode({ provider }: NodeDeps) {
       DocsResultSchema,
     );
     return {
-      trace: ["[docs] generated documentation; apply deferred until explicit approval"],
+      // Append doc file blocks so the end-of-run apply gate can offer them
+      // alongside the implementation instead of dropping them.
+      generatedCode: `${state.generatedCode ?? ""}\n\n${result.docs}`.trim(),
+      trace: ["[docs] generated documentation; offered at the apply gate"],
     };
   };
 }
@@ -539,15 +581,23 @@ export function makeFinalizeNode({ provider }: NodeDeps) {
       `Iterations: ${state.iterationCount}`,
       `Complexity: time=${state.timeComplexity ?? "-"} space=${state.spaceComplexity ?? "-"}`,
       state.compactSummary ? `Compact summary: ${state.compactSummary}` : "",
-      `Generated code:\n${state.generatedCode ?? "(none)"}`,
     ]
       .filter(Boolean)
       .join("\n");
+    // English targets need no localization — skip the egress LLM call and
+    // return the deterministic summary (full code is already shown/applied
+    // by the caller, so it is not repeated here).
+    if (resolveLocaleLabel(state.outputLocale).startsWith("en")) {
+      return {
+        finalOutput: summary,
+        trace: [`[finalize] english output — localization skipped (${state.outputLocale})`],
+      };
+    }
     const finalOutput = await provider.invoke([
       { role: "system", content: FINALIZE_SYSTEM },
       {
         role: "user",
-        content: `Target locale: ${resolveLocaleLabel(state.outputLocale)}\n\nRun summary:\n${summary}`,
+        content: `Target locale: ${resolveLocaleLabel(state.outputLocale)}\n\nRun summary:\n${summary}\n\nGenerated code:\n${state.generatedCode ?? "(none)"}`,
       },
     ]);
     return {
@@ -559,25 +609,24 @@ export function makeFinalizeNode({ provider }: NodeDeps) {
 
 /* ---------------- Conditional edges ---------------- */
 
-export function routeAfterTriage(state: State): "fast_patch" | "decompose" {
-  return state.selectedPath === "FAST_PATH" ? "fast_patch" : "decompose";
+export function routeAfterTriage(state: State): "fast_patch" | "business_context" {
+  // FAST goes straight to the patch loop; the contextualization chain is
+  // reserved for HEAVY work where its cost is justified.
+  return state.selectedPath === "FAST_PATH" ? "fast_patch" : "business_context";
 }
 
 /**
- * Pre-flight runs BEFORE code is committed/executed.
- * - valid   -> FAST: straight to the test runner; HEAVY: granular implementation.
- * - invalid -> re-plan on the active path, up to 3 attempts (loop guardrail).
+ * Pre-flight runs on the HEAVY path only, BEFORE code is committed/executed.
+ * - valid   -> granular implementation.
+ * - invalid -> re-subdivide from the refined request, up to 3 attempts
+ *   (loop guardrail), then end the run.
  */
-export function routeAfterPreFlight(
-  state: State,
-): "fast_patch" | "test_runner" | "implement" | "decompose" | "__end__" {
-  if (state.preFlight?.is_business_valid) {
-    return state.selectedPath === "FAST_PATH" ? "test_runner" : "implement";
-  }
+export function routeAfterPreFlight(state: State): "implement" | "decompose" | "__end__" {
+  if (state.preFlight?.is_business_valid) return "implement";
   if (state.preFlightAttempts >= 3) return "__end__";
-  // HEAVY: re-subdivide from the refined request (pre_flight folded the
-  // violation into currentRequest) instead of re-proposing blindly.
-  return state.selectedPath === "FAST_PATH" ? "fast_patch" : "decompose";
+  // Re-subdivide from the refined request (pre_flight folded the violation
+  // into currentRequest) instead of re-proposing blindly.
+  return "decompose";
 }
 
 export function routeAfterTests(

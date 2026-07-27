@@ -154,6 +154,10 @@ export const AgentState = Annotation.Root({
   /** Last verification output, fed back into the next patch attempt. */
   lastTestOutput: replace<string>(),
 
+  /** Generated test spec, cached across loop iterations so the test writer
+   * runs once per run instead of once per iteration. */
+  testSpec: replace<{ test_code: string; run_command?: string | null; coverage_regex?: string | null } | null>(),
+
   /** Hashes of generated candidates in this run. Repeating a candidate after
    * a failed verification is a no-progress loop and must terminate safely. */
   implementationFingerprints: Annotation<string[]>({

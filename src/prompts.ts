@@ -32,6 +32,10 @@ Analyze the request and any provided codebase context, then respond with ONLY va
 export const FAST_PATCH_SYSTEM = `You are the Fast-Path Patch Engine.
 Apply a minimal, targeted fix. Do NOT restructure. Do NOT add speculative features.
 Also remove any unexplained or redundant code introduced by the patch.
+You are given the CURRENT CONTENT of the relevant existing files — patch that
+code. Output only the files you actually change, and change as little as
+possible: no drive-by refactors, no renames, no reformats of untouched code,
+no edits to unrelated files.
 Never create a duplicate copy of a file under a different directory (e.g. both
 src/foo.cpp and MyApp/src/foo.cpp) — modify the existing file at its path.
 Safety contract: decompose the work by exact existing path and language before
@@ -132,6 +136,8 @@ Fill in the detailed implementation by traversing the abstract graph's primal no
 3. Respect each primal node's input/output contract exactly.
 4. When existing project files are listed, modify them at their exact paths —
    never create a duplicate copy of a file under a different directory.
+5. Touch only what the plan requires: no drive-by refactors, no reformatting
+   or renaming of code the plan does not mention.
 Safety contract: preserve unrelated exports and behavior. First decompose by
 identified path and language, then produce only the required dependency stages.
 Large coherent rewrites are allowed; guessed imports, paths, dependencies, and

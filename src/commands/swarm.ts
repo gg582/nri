@@ -17,10 +17,13 @@ interface SwarmResult {
 
 async function runOne(provider: string, request: string, coverage: number): Promise<SwarmResult> {
   try {
-    const graph = buildGraph({
-      resolveProvider: makeProviderResolver({ provider }),
-      testRunner: createTestRunner(),
-    });
+    const graph = buildGraph(
+      {
+        resolveProvider: makeProviderResolver({ provider }),
+        testRunner: createTestRunner(),
+      },
+      { request },
+    );
     const threadId = `nri-swarm-${provider}-${Date.now()}`;
     const config = { configurable: { thread_id: threadId } };
     let run = await runNri(graph, { request, targetTestCoverage: coverage, threadId });

@@ -1,5 +1,7 @@
 import { END, MemorySaver, START, StateGraph } from "@langchain/langgraph";
 import { AgentState, type AgentStateType, type ProposalGraph } from "../state.js";
+import { loadConfig } from "../config.js";
+import { normalizeReverseMode, resolveDirection } from "./direction.js";
 import type { LLMProviderStrategy } from "../providers/base.js";
 import type { TestRunner } from "../tools/testRunner.js";
 import {
@@ -60,6 +62,10 @@ export interface GraphDeps {
 export interface BuildGraphOptions {
   /** Extra nodes to interrupt before (in addition to human_approval). */
   interruptBefore?: string[];
+  /** Force graph reversal mode regardless of config (default: config.reverse). */
+  reverse?: boolean | "on" | "off" | "auto";
+  /** The request being run — feeds static direction analysis in reverse auto mode. */
+  request?: string;
   /** Liveness hooks fired around every node execution (UI progress display). */
   hooks?: {
     onNodeStart?: (node: string) => void;
@@ -110,39 +116,67 @@ export function buildGraph(deps: GraphDeps, opts?: BuildGraphOptions) {
     .addNode("test_runner", wrap("test_runner", makeTestRunnerNode(forNode("test_writer"))))
     .addNode("visual", wrap("visual", makeVisualNode(forNode("fast_patch"))))
     .addNode("docs", wrap("docs", makeDocsNode(forNode("test_writer"))))
-    .addNode("finalize", wrap("finalize", makeFinalizeNode(forNode("finalize"))))
-    .addEdge(START, "normalize")
-    .addEdge("normalize", "triage")
-    .addConditionalEdges("triage", routeAfterTriage, {
-      fast_patch: "fast_patch",
-      business_context: "business_context",
-    })
-    .addEdge("business_context", "decompose")
-    .addEdge("fast_patch", "test_runner")
-    .addEdge("decompose", "abstract_graph")
-    .addEdge("abstract_graph", "proposal")
-    .addEdge("proposal", "human_approval")
-    .addEdge("human_approval", "pre_flight")
-    .addConditionalEdges("pre_flight", routeAfterPreFlight, {
-      implement: "implement",
-      decompose: "decompose",
-      __end__: END,
-    })
-    .addEdge("implement", "evaluate")
-    .addEdge("evaluate", "test_runner")
-    .addConditionalEdges("test_runner", routeAfterTests, {
-      fast_patch: "fast_patch",
-      decompose: "decompose",
-      visual: "visual",
-      docs: "docs",
-      finalize: "finalize",
-    })
-    .addConditionalEdges("visual", routeAfterVisual, {
-      docs: "docs",
-      finalize: "finalize",
-    })
-    .addEdge("docs", "finalize")
-    .addEdge("finalize", END);
+    .addNode("finalize", wrap("finalize", makeFinalizeNode(forNode("finalize"))));
+
+  // /reverse (config.reverse, overridable via opts): "on" wires every edge
+  // flipped; "auto" (the default) flips only when static analysis of the
+  // request + project tree shows an overwhelming bottom-up/top-down edge.
+  // The forward graph is top-down (request -> decompose -> plan -> implement
+  // -> verify -> finalize); reversed it is forced bottom-up (finalize ->
+  // verify -> implement -> plan -> decompose -> request). Conditional
+  // routing collapses into a single linear chain visiting every node once.
+  const mode = normalizeReverseMode(opts?.reverse ?? loadConfig().reverse);
+  const direction = resolveDirection(mode, opts?.request ?? "");
+  if (mode === "auto") {
+    console.error(`nri: reverse auto → ${direction.reversed ? "reversed (bottom-up)" : "normal (top-down)"} — ${direction.reason}`);
+  }
+  const reverse = direction.reversed;
+  if (reverse) {
+    const REVERSED_ORDER = [
+      "finalize", "docs", "visual", "test_runner", "evaluate", "implement",
+      "pre_flight", "human_approval", "proposal", "abstract_graph",
+      "decompose", "business_context", "fast_patch", "triage", "normalize",
+    ] as const;
+    graph.addEdge(START, REVERSED_ORDER[0]);
+    for (let i = 0; i + 1 < REVERSED_ORDER.length; i++) {
+      graph.addEdge(REVERSED_ORDER[i], REVERSED_ORDER[i + 1]);
+    }
+    graph.addEdge(REVERSED_ORDER[REVERSED_ORDER.length - 1], END);
+  } else {
+    graph
+      .addEdge(START, "normalize")
+      .addEdge("normalize", "triage")
+      .addConditionalEdges("triage", routeAfterTriage, {
+        fast_patch: "fast_patch",
+        business_context: "business_context",
+      })
+      .addEdge("business_context", "decompose")
+      .addEdge("fast_patch", "test_runner")
+      .addEdge("decompose", "abstract_graph")
+      .addEdge("abstract_graph", "proposal")
+      .addEdge("proposal", "human_approval")
+      .addEdge("human_approval", "pre_flight")
+      .addConditionalEdges("pre_flight", routeAfterPreFlight, {
+        implement: "implement",
+        decompose: "decompose",
+        __end__: END,
+      })
+      .addEdge("implement", "evaluate")
+      .addEdge("evaluate", "test_runner")
+      .addConditionalEdges("test_runner", routeAfterTests, {
+        fast_patch: "fast_patch",
+        decompose: "decompose",
+        visual: "visual",
+        docs: "docs",
+        finalize: "finalize",
+      })
+      .addConditionalEdges("visual", routeAfterVisual, {
+        docs: "docs",
+        finalize: "finalize",
+      })
+      .addEdge("docs", "finalize")
+      .addEdge("finalize", END);
+  }
 
   const checkpointer = new MemorySaver();
   const interruptBefore = [...new Set(["human_approval", ...(opts?.interruptBefore ?? [])])];
@@ -174,6 +208,11 @@ export async function runNri(graph: CompiledNriGraph, input: NriRunInput): Promi
   await graph.invoke(
     {
       rawRequest: input.request,
+      // Seed the request fields up front: in reversed graphs normalize runs
+      // LAST, so every node before it would otherwise see them unset. In the
+      // normal order normalize simply overwrites these with the same values.
+      originalRequest: input.request,
+      currentRequest: input.request,
       outputLocale: input.locale ?? "en-US",
       targetTestCoverage: input.targetTestCoverage,
       maxIterations: input.maxIterations ?? 5,

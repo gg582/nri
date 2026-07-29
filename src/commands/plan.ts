@@ -16,7 +16,7 @@ export async function planCommand(args: string[]): Promise<void> {
 
   const graph = buildGraph(
     { resolveProvider: makeProviderResolver({}), testRunner: createTestRunner() },
-    { interruptBefore: ["implement", "test_runner"] },
+    { interruptBefore: ["implement", "test_runner"], request },
   );
   const threadId = `nri-plan-${Date.now()}`;
   const config = { configurable: { thread_id: threadId } };

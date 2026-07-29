@@ -6,6 +6,7 @@ import { PROVIDER_NAMES } from "./providers/factory.js";
 import { makeProviderResolver } from "./providers/resolver.js";
 import { createTestRunner } from "./tools/factory.js";
 import { loadConfig, resolveLocale } from "./config.js";
+import { normalizeReverseMode } from "./graph/direction.js";
 import type { ProposalGraph } from "./state.js";
 
 interface CliArgs {
@@ -92,6 +93,7 @@ Usage:
   nri permission <list|set-mode|allow|deny|clear>   execution policy (also: /permission)
   nri yolo [off]                          toggle yolo permission mode (also: /yolo)
   nri thinking <show|hide>                toggle reasoning output (also: /thinking)
+  nri reverse <on|off|auto>               graph reversal control (default: auto — static analysis flips only on overwhelming structural edge)
   nri plan "<request>"                    read-only planning run (also: /plan)
   nri goal <set|status|run|clear>         durable goal mode (also: /goal)
   nri swarm [--providers a,b] "<request>" parallel multi-provider comparison (also: /swarm)
@@ -194,6 +196,11 @@ async function main(): Promise<void> {
     thinkingCommand(argv.slice(3));
     return;
   }
+  if (command === "reverse") {
+    const { reverseCommand } = await import("./commands/reverse.js");
+    reverseCommand(argv.slice(3));
+    return;
+  }
   if (command === "plan") {
     const { planCommand } = await import("./commands/plan.js");
     await planCommand(argv.slice(3));
@@ -259,6 +266,7 @@ async function main(): Promise<void> {
 
   const routing = loadConfig().routing;
   const resolver = makeProviderResolver({ provider: args.provider, model: args.model });
+  if (normalizeReverseMode(loadConfig().reverse) === "on") stdout.write("nri: graph reversal ON — nodes run in reverse order (/reverse off to disable)\n");
   if (routing?.default || Object.keys(routing?.nodes ?? {}).length > 0) {
     const { formatSpec } = await import("./commands/model.js");
     stdout.write(`nri: routing from config (default=${formatSpec(routing?.default) ?? "cli"})\n`);
@@ -267,7 +275,7 @@ async function main(): Promise<void> {
     stdout.write(`nri: provider=${head.name} model=${head.model}\n`);
   }
 
-  const graph = buildGraph({ resolveProvider: resolver, testRunner: createTestRunner() });
+  const graph = buildGraph({ resolveProvider: resolver, testRunner: createTestRunner() }, { request: args.request });
   const threadId = `nri-${Date.now()}`;
 
   let run = await runNri(graph, {

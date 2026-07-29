@@ -123,6 +123,7 @@ inside `nri tui`.
 | `nri provider list/import/add/remove` | manage providers; auto-import from kimi-code/codex |
 | `nri model list/assign/set/candidates` | per-node model routing by capability tier |
 | `nri permission list/set-mode/allow/deny/clear` | execution policy: `plan` / `auto` / `yolo` + regex lists |
+| `nri reverse on\|off\|auto` | graph reversal: `on` = always flipped (top-down ↔ bottom-up), `auto` (default) = static analysis flips only on an overwhelming structural edge — no LLM involved |
 | `nri plan "<request>"` | read-only plan; stops before implement/test |
 | `nri goal set/status/run/clear` | durable objective + completion criterion + budget; runs offer best-effort changes even when the criterion is missed |
 | `nri swarm [--providers a,b] "<request>"` | same request across providers, side-by-side |
@@ -160,7 +161,8 @@ agentic mini-loop (`src/tools/refine.ts`):
 
 1. **Deterministic flags first** (no LLM cost): phantom imports (package not
    in `package.json`, unresolvable relative paths — the classic
-   `@granular/core`), overwrites that silently drop existing exports or
+   `@granular/core`; files created within the same change set count as
+   resolvable), overwrites that silently drop existing exports or
    shrink files, JSON that doesn't parse.
 2. **Agentic correction** (only when flagged): the LLM reinterprets the
    output as ONE corrected unified diff against the *actual* file contents;
@@ -219,6 +221,9 @@ an existing kimi-code install; `nri model assign` lets you multi-select models
 and maps them onto node tiers (strong: decompose/implement/pre_flight…, mid:
 business_context/evaluate, fast: triage/fast_patch/test_writer). Config lives
 in `~/.config/nri/config.json` merged with `nri.config.json` in the cwd.
+Add `"blockedProviders": ["kimi"]` to exclude dead or unwanted providers from
+routing pools and auto-selection; explicitly resolving a blocked provider
+fails with a clear error.
 
 ## Examples
 

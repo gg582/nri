@@ -67,7 +67,7 @@ async function run(): Promise<void> {
   const request =
     goal.objective + (goal.completionCriterion ? `\n\nCompletion criterion: ${goal.completionCriterion}` : "");
 
-  const graph = buildGraph({ resolveProvider: makeProviderResolver({}), testRunner: createTestRunner() });
+  const graph = buildGraph({ resolveProvider: makeProviderResolver({}), testRunner: createTestRunner() }, { request });
   const threadId = `nri-goal-${Date.now()}`;
   const config = { configurable: { thread_id: threadId } };
 

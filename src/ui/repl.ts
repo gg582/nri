@@ -3,6 +3,7 @@ import { makeProviderResolver } from "../providers/resolver.js";
 import { createTestRunner } from "../tools/factory.js";
 import type { AgentStateType } from "../state.js";
 import { loadConfig } from "../config.js";
+import { normalizeReverseMode } from "../graph/direction.js";
 import { cleanupVisualTemps } from "../tools/visual.js";
 import { compressConversation } from "../context/conversation.js";
 
@@ -29,6 +30,7 @@ export const HELP_LINES = [
   "  /permission list|set-mode <plan|auto|yolo>|allow <re>|deny <re>|clear <allow|deny>",
   "  /yolo [off]                       toggle yolo mode (gates off, advisory only)",
   "  /thinking show|hide               toggle pipeline reasoning output",
+  "  /reverse on|off|auto               graph reversal (auto = flip only on overwhelming static signal; default)",
   "  /plan <request>                 read-only plan, nothing executed",
   "  /goal set \"<obj>\" [--done-when X --budget N] | status | run | clear",
   "  /swarm [--providers a,b] [--coverage N] <request>",
@@ -140,6 +142,7 @@ export class Repl {
     const graph = buildGraph(
       { resolveProvider: resolver, testRunner: createTestRunner() },
       {
+        request,
         hooks: {
           onNodeStart: (node) => {
             runningNode = node;
@@ -181,8 +184,12 @@ export class Repl {
         }
       };
 
+      if (normalizeReverseMode(loadConfig().reverse) === "on") this.push("  ▶ graph reversal ON — nodes run in reverse order (/reverse off to disable)");
       await drive({
         rawRequest: request,
+        // Seeded so reversed graphs (normalize last) still see the request.
+        originalRequest: request,
+        currentRequest: request,
         conversationContext: this.conversationContext(),
         outputLocale: "en-US",
         targetTestCoverage: 80,
@@ -315,6 +322,11 @@ export class Repl {
       case "thinking": {
         const { thinkingCommand } = await import("../commands/thinking.js");
         this.push(...(await capture(() => thinkingCommand(rest))));
+        return;
+      }
+      case "reverse": {
+        const { reverseCommand } = await import("../commands/reverse.js");
+        this.push(...(await capture(() => reverseCommand(rest))));
         return;
       }
       case "plan": {

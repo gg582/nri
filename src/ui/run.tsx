@@ -71,6 +71,7 @@ export async function runWithUi(opts: UiRunOptions): Promise<number> {
   const graph = buildGraph(
     { resolveProvider: resolver, testRunner: createTestRunner() },
     {
+      request: opts.request,
       hooks: {
         onNodeStart: (node) => {
           state.phase = node;

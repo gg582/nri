@@ -65,15 +65,24 @@ export function isProviderName(value: string): value is ProviderName {
   return (PROVIDER_NAMES as readonly string[]).includes(value);
 }
 
+/** Providers blocked via `blockedProviders` in config (case-insensitive). */
+function blockedSet(): Set<string> {
+  return new Set((loadConfig().blockedProviders ?? []).map((b) => b.toLowerCase()));
+}
+
 /**
  * Resolve the active provider strategy.
  * Precedence: explicit options > stored config credentials > env vars.
  * Name precedence: argument > NRI_PROVIDER env > first available provider > "openai".
+ * A provider listed in `blockedProviders` never resolves, even on explicit request.
  */
 export function createProvider(name?: string, options: StrategyOptions = {}): LLMProviderStrategy {
   const resolved = (name ?? process.env.NRI_PROVIDER ?? availableProviders()[0] ?? "openai").toLowerCase();
   if (!isProviderName(resolved)) {
     throw new Error(`Unknown provider "${resolved}". Supported: ${PROVIDER_NAMES.join(", ")}`);
+  }
+  if (blockedSet().has(resolved)) {
+    throw new Error(`Provider "${resolved}" is blocked (blockedProviders in nri config).`);
   }
   const stored = loadConfig().providers?.[resolved] ?? {};
   return registry[resolved]({
@@ -84,16 +93,18 @@ export function createProvider(name?: string, options: StrategyOptions = {}): LL
   });
 }
 
-/** Providers usable right now: env key present OR credentials stored in config. */
+/** Providers usable right now: not blocked, and env key present OR credentials stored in config. */
 export function availableProviders(): ProviderName[] {
   const stored = loadConfig().providers ?? {};
+  const blocked = blockedSet();
   return PROVIDER_NAMES.filter(
     (name) =>
-      ENV_KEYS[name].some((k) => process.env[k]) ||
-      stored[name]?.apiKey ||
-      (stored[name]?.auth === "codex-oauth" && codexAuthAvailable()) ||
-      (stored[name]?.auth === "kimi-code-oauth" && kimiCodeCredAvailable()) ||
-      (stored[name]?.auth === "antigravity-oauth" && antigravityAvailable()),
+      !blocked.has(name) &&
+      (ENV_KEYS[name].some((k) => process.env[k]) ||
+        stored[name]?.apiKey ||
+        (stored[name]?.auth === "codex-oauth" && codexAuthAvailable()) ||
+        (stored[name]?.auth === "kimi-code-oauth" && kimiCodeCredAvailable()) ||
+        (stored[name]?.auth === "antigravity-oauth" && antigravityAvailable())),
   );
 }
 

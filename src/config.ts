@@ -27,6 +27,19 @@ export interface RoutingConfig {
 
 export interface NriConfig {
   locale?: string;
+  /**
+   * Providers that must never be used, even when credentials exist.
+   * Blocked providers are excluded from auto-selection and routing pools,
+   * and explicitly resolving one throws.
+   */
+  blockedProviders?: string[];
+  /**
+   * /reverse: "on" = run the pipeline graph with every edge flipped (finalize
+   * first, normalize last); "off" = normal order; "auto" (default) = static
+   * analysis flips the graph only when one direction is overwhelmingly
+   * favorable. Legacy booleans: true = "on", false = "off".
+   */
+  reverse?: boolean | "on" | "off" | "auto";
   providers?: Record<string, ProviderConfig>;
   routing?: RoutingConfig;
   permissions?: {
@@ -60,6 +73,8 @@ function readJson(path: string): NriConfig {
 function merge(base: NriConfig, over: NriConfig): NriConfig {
   return {
     locale: over.locale ?? base.locale,
+    blockedProviders: over.blockedProviders ?? base.blockedProviders,
+    reverse: over.reverse ?? base.reverse,
     providers: { ...base.providers, ...over.providers },
     routing: {
       default: over.routing?.default ?? base.routing?.default,

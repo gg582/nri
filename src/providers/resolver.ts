@@ -161,6 +161,8 @@ export function makeProviderResolver(cli?: {
   model?: string;
 }, hooks?: { onFallback?: (message: string) => void }): (node: string) => LLMProviderStrategy {
   const config = loadConfig();
+  const blocked = new Set((config.blockedProviders ?? []).map((b) => b.toLowerCase()));
+  const warned = new Set<string>();
   const cache = new Map<string, LLMProviderStrategy>();
   const build = (spec: string): LLMProviderStrategy => {
     const { provider, model } = parseModelSpec(spec);
@@ -168,7 +170,17 @@ export function makeProviderResolver(cli?: {
   };
   return (node: string) => {
     const raw = config.routing?.nodes?.[node] ?? config.routing?.default;
-    const pool = (raw ? (Array.isArray(raw) ? raw : [raw]) : []).filter(Boolean);
+    const specs = (raw ? (Array.isArray(raw) ? raw : [raw]) : []).filter(Boolean);
+    // Blocked providers are dropped from routing pools (once-logged) so a
+    // dead provider costs no timeout before the next pool member takes over.
+    const pool = specs.filter((spec) => {
+      const isBlocked = blocked.has(spec.split(":")[0].toLowerCase());
+      if (isBlocked && !warned.has(spec)) {
+        warned.add(spec);
+        console.error(`nri: routing spec "${spec}" skipped — provider blocked (blockedProviders)`);
+      }
+      return !isBlocked;
+    });
     const key = pool.length > 0 ? pool.join(">") : `cli:${cli?.provider ?? ""}:${cli?.model ?? ""}`;
     let strategy = cache.get(key);
     if (!strategy) {

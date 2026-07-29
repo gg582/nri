@@ -226,25 +226,6 @@ Respond with ONLY valid JSON:
   "key_decisions": string[]
 }`;
 
-export const GRAPH_COMPACT_SYSTEM = `You are the Graph-Preserving Compaction Engine.
-Compress the provided run state WHILE PRESERVING GRAPH REFERENCE INTEGRITY.
-
-Hard rules:
-1. Every task-tree node_id must survive unchanged.
-2. Every abstract-graph primal node id and every edge (from,to) must survive unchanged.
-3. Every proposal node_id must survive unchanged.
-4. You may only shorten free-text fields (task_description, responsibility, notes,
-   proposal text, reason_for_adoption, linearization_notes). Never invent or drop ids.
-5. Summarize the trace into "summary".
-
-Respond with ONLY valid JSON:
-{
-  "summary": string,
-  "task_tree": <same shape as input, or null>,
-  "abstract_graph": <same shape as input, or null>,
-  "proposals": <same shape as input, or null>
-}`;
-
 export const NORMALIZE_SYSTEM = `You are the Request Normalization Engine (ingress).
 Take the raw user request (any language) and:
 1. Translate it into common English.

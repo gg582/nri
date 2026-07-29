@@ -78,13 +78,17 @@ export function buildGraph(deps: GraphDeps, opts?: BuildGraphOptions) {
   });
   type NodeFn = (state: AgentStateType) => Promise<Partial<AgentStateType>>;
   const wrap = (name: string, fn: NodeFn): NodeFn => {
-    if (!opts?.hooks) return fn;
     return async (state) => {
-      opts.hooks!.onNodeStart?.(name);
+      const started = Date.now();
+      opts?.hooks?.onNodeStart?.(name);
       try {
-        return await fn(state);
+        const update = await fn(state);
+        const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+        // Per-node timing in the trace: the only way to attribute a long run
+        // (e.g. "proposal running 806s") to a specific stage after the fact.
+        return { ...update, trace: [...(update.trace ?? []), `[timing] ${name} ${elapsed}s`] };
       } finally {
-        opts.hooks!.onNodeEnd?.(name);
+        opts?.hooks?.onNodeEnd?.(name);
       }
     };
   };

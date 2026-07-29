@@ -13,6 +13,12 @@ export interface InvokeOptions {
   temperature?: number;
   /** Hard cap on output tokens for this call. */
   maxTokens?: number;
+  /**
+   * invokeJson only: schema-validation retries after the first attempt
+   * (default 2). Lower it for large structured calls where a retry
+   * re-sends a big prompt.
+   */
+  retries?: number;
 }
 
 /**
@@ -76,13 +82,16 @@ export function extractJson(raw: string): string {
  *   2. feed the error (with a snippet around the failure position) back to
  *      the model and retry,
  *   3. one salvage pass asking the model to reformat its own last answer.
- * Model *switching* is handled one level up by TrialStrategy.invokeJson.
+ * Failed responses are kept in the retry history only as bounded snippets —
+ * re-sending a full large structured output on every attempt would inflate
+ * each retry's prompt and latency. Model *switching* is handled one level
+ * up by TrialStrategy.invokeJson.
  */
 export async function invokeJsonWithRetry<T>(
   provider: LLMProviderStrategy,
   messages: ChatMessage[],
   schema: z.ZodType<T>,
-  opts?: InvokeOptions & { retries?: number },
+  opts?: InvokeOptions,
 ): Promise<T> {
   const retries = opts?.retries ?? 2;
   const history: ChatMessage[] = [...messages];
@@ -120,13 +129,26 @@ export async function invokeJsonWithRetry<T>(
     );
   };
 
+  /** Bounded stand-in for a failed response kept in the retry history. */
+  const snippetForHistory = (raw: string, limit = 2000): string => {
+    if (raw.length <= limit) return raw;
+    const half = Math.floor(limit / 2);
+    return `${raw.slice(0, half)}\n...[${raw.length - limit} chars omitted]...\n${raw.slice(-half)}`;
+  };
+
   for (let attempt = 0; attempt <= retries; attempt++) {
     if (attempt > 0) history.push({ role: "user", content: feedback(lastError, lastRaw) });
+    const started = Date.now();
     const raw = await provider.invoke(history, opts);
+    const elapsed = ((Date.now() - started) / 1000).toFixed(1);
     lastRaw = raw;
-    history.push({ role: "assistant", content: raw });
-    const { ok, value } = tryParse(raw);
+    history.push({ role: "assistant", content: snippetForHistory(raw) });
+    const { ok, value, error } = tryParse(raw);
     if (ok) return value as T;
+    console.error(
+      `nri: structured output attempt ${attempt + 1}/${retries + 1} failed validation after ${elapsed}s ` +
+        `(${error.split("\n")[0].slice(0, 160)})`,
+    );
   }
   if (lastRaw) {
     try {

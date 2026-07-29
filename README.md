@@ -105,6 +105,14 @@ only when the request asks for them, and implementation prompts are grounded
 in the *current contents* of the files the request refers to — the model
 patches real code instead of hallucinating against a file-name list.
 
+Latency is bounded, not best-effort: every LLM call has a per-call timeout
+(`NRI_CALL_TIMEOUT_MS`, default 120s), SDK-internal retries are disabled so
+retrying happens only in the harness's own logged layers (structured-output
+repair loop: 2 attempts + a salvage pass by default, 1 attempt for large
+structured calls like `proposal`, with failed responses kept as bounded
+snippets instead of re-sent in full), and every node records its elapsed
+time in the trace (`[timing] <node> Xs`) so slow stages stay attributable.
+
 ## Commands
 
 Every subcommand works as `nri <cmd>`, `nri /<cmd>`, and as a slash command
@@ -119,7 +127,7 @@ inside `nri tui`.
 | `nri goal set/status/run/clear` | durable objective + completion criterion + budget; runs offer best-effort changes even when the criterion is missed |
 | `nri swarm [--providers a,b] "<request>"` | same request across providers, side-by-side |
 | `nri compact <state.json>` | fold run context into a dense summary |
-| `nri graph-compact <state.json>` | same, preserving graph node ids/edges (validated) |
+| `nri graph-compact <state.json>` | same, plus deterministic graph-structure shrinking (free-text clipped; ids/edges preserved by construction) |
 | `nri tui` | interactive console (ink TUI; readline fallback when piped) |
 | `nri help` | CLI reference |
 

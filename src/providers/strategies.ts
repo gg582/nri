@@ -17,6 +17,13 @@ export interface StrategyOptions {
   auth?: string;
 }
 
+/**
+ * Per-call HTTP timeout. A stalled request must fail fast so the harness's
+ * own retry/pool layers (which log and bound their work) can take over,
+ * instead of a single call hanging for many minutes. Overridable via env.
+ */
+const CALL_TIMEOUT_MS = Number(process.env.NRI_CALL_TIMEOUT_MS ?? 120_000);
+
 function toLangChainMessages(messages: ChatMessage[]): BaseMessage[] {
   return messages.map((m) => {
     switch (m.role) {
@@ -52,7 +59,11 @@ abstract class NativeChatStrategy extends BaseProviderStrategy {
   protected abstract createClient(opts?: InvokeOptions): BaseChatModel;
 
   async invoke(messages: ChatMessage[], opts?: InvokeOptions): Promise<string> {
-    const res = await this.createClient(opts).invoke(toLangChainMessages(messages));
+    // Not every native client exposes a constructor timeout; an abort signal
+    // bounds the call regardless of integration support.
+    const res = await this.createClient(opts).invoke(toLangChainMessages(messages), {
+      signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+    });
     return contentToString(res.content);
   }
 
@@ -120,6 +131,10 @@ export class OpenAICompatibleStrategy extends BaseProviderStrategy {
     return new ChatOpenAI({
       model: this.args.model,
       apiKey: this.args.apiKey,
+      // SDK-internal silent retries would multiply latency on top of the
+      // harness's own (logged, bounded) retry layers — keep one attempt here.
+      maxRetries: 0,
+      timeout: CALL_TIMEOUT_MS,
       configuration: this.args.baseURL ? { baseURL: this.args.baseURL } : undefined,
       ...(fixedSampling
         ? { modelKwargs: opts?.maxTokens && !dropMaxTokens ? { max_completion_tokens: opts.maxTokens } : {} }
@@ -221,6 +236,7 @@ export class GeminiStrategy extends NativeChatStrategy {
     return new ChatGoogleGenerativeAI({
       model: this.model,
       apiKey: this.apiKey,
+      maxRetries: 0,
       temperature: opts?.temperature ?? 0,
       maxOutputTokens: opts?.maxTokens,
     });
@@ -265,6 +281,8 @@ export class DeepSeekStrategy extends NativeChatStrategy {
     return new ChatDeepSeek({
       model: this.model,
       apiKey: this.apiKey,
+      maxRetries: 0,
+      timeout: CALL_TIMEOUT_MS,
       temperature: opts?.temperature ?? 0,
       maxTokens: opts?.maxTokens,
     });
@@ -289,6 +307,7 @@ export class GrokStrategy extends NativeChatStrategy {
     return new ChatXAI({
       model: this.model,
       apiKey: this.apiKey,
+      maxRetries: 0,
       temperature: opts?.temperature ?? 0,
       maxTokens: opts?.maxTokens,
     });
@@ -313,6 +332,8 @@ export class ClaudeStrategy extends NativeChatStrategy {
     return new ChatAnthropic({
       model: this.model,
       apiKey: this.apiKey,
+      maxRetries: 0,
+      clientOptions: { timeout: CALL_TIMEOUT_MS },
       temperature: opts?.temperature ?? 0,
       maxTokens: opts?.maxTokens,
     });

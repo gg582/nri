@@ -1,25 +1,18 @@
 import { z } from "zod";
 import type { LLMProviderStrategy } from "../providers/base.js";
 import {
-  AbstractGraphSchema,
-  ProposalGraphSchema,
-  TaskNodeSchema,
+  type AbstractGraph,
   type AgentStateType,
+  type ProposalGraph,
+  type TaskNode,
 } from "../state.js";
-import { COMPACT_SYSTEM, GRAPH_COMPACT_SYSTEM } from "../prompts.js";
+import { COMPACT_SYSTEM } from "../prompts.js";
 
 type State = AgentStateType;
 
 const CompactResultSchema = z.object({
   summary: z.string(),
   key_decisions: z.array(z.string()),
-});
-
-const GraphCompactResultSchema = z.object({
-  summary: z.string(),
-  task_tree: TaskNodeSchema.nullable(),
-  abstract_graph: AbstractGraphSchema.nullable(),
-  proposals: ProposalGraphSchema.nullable(),
 });
 
 /**
@@ -47,80 +40,54 @@ export async function compactState(state: State, provider: LLMProviderStrategy):
   };
 }
 
-function collectTreeIds(node: { node_id: string; children: unknown[] } | null, acc = new Set<string>()): Set<string> {
-  if (!node) return acc;
-  acc.add(node.node_id);
-  for (const c of node.children as { node_id: string; children: unknown[] }[]) collectTreeIds(c, acc);
-  return acc;
+/** Cap for free-text fields when deterministically shrinking graph structures. */
+const FREE_TEXT_CAP = 280;
+
+function clip(text: string): string {
+  return text.length > FREE_TEXT_CAP ? `${text.slice(0, FREE_TEXT_CAP - 1)}…` : text;
+}
+
+function clipTaskTree(node: TaskNode): TaskNode {
+  return { ...node, task_description: clip(node.task_description), children: node.children.map(clipTaskTree) };
+}
+
+function clipAbstractGraph(graph: AbstractGraph): AbstractGraph {
+  return {
+    ...graph,
+    linearization_notes: clip(graph.linearization_notes),
+    primal_nodes: graph.primal_nodes.map((n) => ({
+      ...n,
+      responsibility: clip(n.responsibility),
+      input_contract: clip(n.input_contract),
+      output_contract: clip(n.output_contract),
+    })),
+  };
+}
+
+function clipProposals(proposals: ProposalGraph): ProposalGraph {
+  return {
+    selected_proposals: proposals.selected_proposals.map((p) => ({
+      ...p,
+      proposal: clip(p.proposal),
+      reason_for_adoption: clip(p.reason_for_adoption),
+    })),
+  };
 }
 
 /**
- * /graph-compact — like /compact, but compresses WHILE preserving graph
- * reference integrity: every task-tree node_id, abstract-graph primal id and
- * edge, and proposal node_id must survive. The LLM may only shorten
- * free-text fields; structural identity is validated after the call and any
- * violation falls back to the original structure.
+ * /graph-compact — like /compact, and additionally shrinks the graph
+ * structures DETERMINISTICALLY: only free-text fields are clipped to
+ * FREE_TEXT_CAP chars while every task-tree node_id, abstract-graph primal
+ * id and edge, and proposal node_id is preserved by construction (the LLM
+ * never sees the structures, so reference integrity cannot be violated).
  */
 export async function graphCompactState(state: State, provider: LLMProviderStrategy): Promise<Partial<State>> {
-  const result = await provider.invokeJson(
-    [
-      { role: "system", content: GRAPH_COMPACT_SYSTEM },
-      {
-        role: "user",
-        content: JSON.stringify(
-          {
-            trace: state.trace,
-            task_tree: state.taskTree,
-            abstract_graph: state.abstractGraph,
-            proposals: state.proposalGraph,
-          },
-          null,
-          2,
-        ),
-      },
-    ],
-    GraphCompactResultSchema,
-  );
-
-  // --- reference-integrity validation ---
-  const warnings: string[] = [];
-  let taskTree = state.taskTree;
-  if (result.task_tree && state.taskTree) {
-    const before = collectTreeIds(state.taskTree);
-    const after = collectTreeIds(result.task_tree);
-    const missing = [...before].filter((id) => !after.has(id));
-    if (missing.length === 0) taskTree = result.task_tree;
-    else warnings.push(`task_tree ids lost (${missing.join(", ")}) — kept original`);
-  }
-  let abstractGraph = state.abstractGraph;
-  if (result.abstract_graph && state.abstractGraph) {
-    const idsBefore = new Set(state.abstractGraph.primal_nodes.map((n) => n.id));
-    const edgesBefore = new Set(state.abstractGraph.edges.map((e) => `${e.from}->${e.to}`));
-    const idsAfter = new Set(result.abstract_graph.primal_nodes.map((n) => n.id));
-    const edgesAfter = new Set(result.abstract_graph.edges.map((e) => `${e.from}->${e.to}`));
-    const missingIds = [...idsBefore].filter((i) => !idsAfter.has(i));
-    const missingEdges = [...edgesBefore].filter((e) => !edgesAfter.has(e));
-    if (missingIds.length === 0 && missingEdges.length === 0) abstractGraph = result.abstract_graph;
-    else warnings.push(`abstract_graph refs lost (${[...missingIds, ...missingEdges].join(", ")}) — kept original`);
-  }
-  let proposalGraph = state.proposalGraph;
-  if (result.proposals && state.proposalGraph) {
-    const before = new Set(state.proposalGraph.selected_proposals.map((p) => p.node_id));
-    const after = new Set(result.proposals.selected_proposals.map((p) => p.node_id));
-    const missing = [...before].filter((id) => !after.has(id));
-    if (missing.length === 0) proposalGraph = result.proposals;
-    else warnings.push(`proposal node_ids lost (${missing.join(", ")}) — kept original`);
-  }
-
+  const base = await compactState(state, provider);
   return {
-    compactSummary: result.summary,
-    taskTree,
-    abstractGraph,
-    proposalGraph,
-    trace: [
-      `[graph-compact] ${result.summary}`,
-      ...warnings.map((w) => `[graph-compact][warn] ${w}`),
-      ...state.trace.slice(-3),
-    ],
+    ...base,
+    taskTree: state.taskTree ? clipTaskTree(state.taskTree) : state.taskTree,
+    abstractGraph: state.abstractGraph ? clipAbstractGraph(state.abstractGraph) : state.abstractGraph,
+    proposalGraph: state.proposalGraph ? clipProposals(state.proposalGraph) : state.proposalGraph,
+    trace: (base.trace ?? []).map((l) => l.replace("[compact]", "[graph-compact]")),
   };
 }

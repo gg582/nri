@@ -292,6 +292,9 @@ export function makeProposalNode({ provider }: NodeDeps) {
         },
       ],
       ProposalGraphSchema,
+      // Large in/out structured call: one retry is enough — further attempts
+      // re-send the whole graph prompt and multiply latency.
+      { retries: 1 },
     );
     return {
       proposalGraph: proposals,

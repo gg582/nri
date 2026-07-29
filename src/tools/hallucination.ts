@@ -35,10 +35,13 @@ export function extractImports(content: string): string[] {
   return [...specs];
 }
 
-function resolveRelativeImport(fromFile: string, spec: string): boolean {
+function resolveRelativeImport(fromFile: string, spec: string, planPaths: Set<string>): boolean {
   const base = join(dirname(fromFile), spec);
   const candidates = [base, `${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}.py`, join(base, "index.ts"), join(base, "index.js")];
-  return candidates.some((c) => existsSync(c));
+  // Files created within the same change set are valid import targets even
+  // though they are not on disk yet (e.g. cart.js importing the promotion.js
+  // that the very same plan introduces).
+  return candidates.some((c) => existsSync(c) || planPaths.has(c));
 }
 
 /** Exported symbol names (crude: TS/JS export declarations). */
@@ -50,13 +53,13 @@ function exportedSymbols(content: string): Set<string> {
   return names;
 }
 
-function flagChange(change: FileChange, deps: Set<string>): string[] {
+function flagChange(change: FileChange, deps: Set<string>, planPaths: Set<string>): string[] {
   const flags: string[] = [];
 
   // 1. Phantom imports (the classic hallucination: '@granular/core' et al.)
   for (const spec of extractImports(change.content)) {
     if (spec.startsWith(".")) {
-      if (!resolveRelativeImport(change.path, spec)) {
+      if (!resolveRelativeImport(change.path, spec, planPaths)) {
         flags.push(`${change.path}: relative import "${spec}" does not resolve to any file`);
       }
     } else {
@@ -95,7 +98,10 @@ function flagChange(change: FileChange, deps: Set<string>): string[] {
 /** Run all deterministic checks over a plan. */
 export function flagHallucinations(plan: ApplyPlan): string[] {
   const deps = packageDeps();
-  const flags = plan.changes.flatMap((c) => flagChange(c, deps));
+  // Paths written by this plan, normalized like join() output (no "./" prefix),
+  // so import checks can recognize same-batch new files.
+  const planPaths = new Set(plan.changes.map((c) => c.path.replace(/^\.\//, "")));
+  const flags = plan.changes.flatMap((c) => flagChange(c, deps, planPaths));
   for (const change of plan.changes) {
     if (change.kind === "full-file" && !existsSync(change.path)) {
       const name = basename(change.path);

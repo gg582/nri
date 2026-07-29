@@ -62,6 +62,22 @@ async function main() {
     console.log("flags:", flags);
     if (!flags.some((f) => f.includes("@granular/core"))) throw new Error("phantom import not flagged");
 
+    // 2b. import of a file created in the SAME change set is not a phantom
+    const MULTI_FILE = `\`\`\`typescript
+// src/promotion.ts
+export const discount = (n: number) => n * 0.9;
+\`\`\`
+\`\`\`typescript
+// src/cart.ts
+import { discount } from "./promotion";
+export const total = (n: number) => discount(n);
+\`\`\``;
+    const multiFlags = flagHallucinations((await refineChanges(MULTI_FILE)).plan);
+    console.log("multi-file flags:", multiFlags);
+    if (multiFlags.some((f) => f.includes("./promotion"))) {
+      throw new Error("same-change-set import falsely flagged as phantom");
+    }
+
     // 3. agentic loop corrects into a valid unified diff
     mkdirSync(join(dir, "src"), { recursive: true });
     writeFileSync(join(dir, "src/bad.ts"), "export const old = 0;\n");

@@ -208,6 +208,33 @@ export async function providerAdd(
   }
 }
 
+/** `nri provider login [antigravity] [consumer|gcp]` — browser OAuth, 1:1 agy CLI mimicry. */
+export async function providerLogin(client?: string, method?: string): Promise<void> {
+  if (client && client !== "antigravity") {
+    throw new Error(`login is only supported for "antigravity" (got "${client}")`);
+  }
+  if (method && method !== "consumer" && method !== "gcp") {
+    throw new Error(`unknown auth method "${method}" (consumer|gcp)`);
+  }
+  const { antigravityLogin } = await import("../providers/antigravityAuth.js");
+  await antigravityLogin(method === "gcp" ? "gcp" : "consumer");
+  // Same registration as providerImport("antigravity") so the gemini provider
+  // routes through the antigravity strategy without a separate import step.
+  const existing = loadConfig().providers ?? {};
+  saveGlobalConfig({
+    providers: {
+      ...existing,
+      gemini: {
+        ...existing.gemini,
+        auth: "antigravity-oauth",
+        defaultModel: existing.gemini?.defaultModel ?? "gemini-3-flash",
+        note: "antigravity oauth login (agy CLI mimicry — separate from API-key quota)",
+      },
+    },
+  });
+  stdout.write(`saved provider "gemini" (antigravity oauth)\n`);
+}
+
 export function providerRemove(name?: string): void {
   if (!name) throw new Error("usage: nri provider remove <name>");
   const existing = loadConfig().providers ?? {};
@@ -266,6 +293,9 @@ export async function providerCommand(args: string[]): Promise<void> {
     case "import":
       providerImport(rest[0]);
       return;
+    case "login":
+      await providerLogin(rest[0], rest[1]);
+      return;
     case "add":
       await providerAdd(rest[0]);
       return;
@@ -276,6 +306,6 @@ export async function providerCommand(args: string[]): Promise<void> {
       await providerRefresh(rest[0]);
       return;
     default:
-      throw new Error(`unknown provider subcommand "${sub}" (list|import|add|remove|refresh)`);
+      throw new Error(`unknown provider subcommand "${sub}" (list|import|login|add|remove|refresh)`);
   }
 }

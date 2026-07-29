@@ -1,9 +1,15 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { BaseProviderStrategy, type ChatMessage, type InvokeOptions } from "./base.js";
 import type { StrategyOptions } from "./strategies.js";
+import {
+  oauthClients,
+  readTokenFile,
+  writeTokenFile,
+  type OauthClient,
+} from "./antigravityAuth.js";
 
 /**
  * Gemini via the Antigravity CLI's Google oauth (antigravity CLI mimicry).
@@ -12,59 +18,25 @@ import type { StrategyOptions } from "./strategies.js";
  * ~/.gemini/antigravity-cli/antigravity-oauth-token and calls the Code
  * Assist internal API (cloudcode-pa v1internal) with it — quota there is
  * separate from a Gemini API-key quota, so this path does not consume the
- * latter. We reuse the CLI's embedded oauth client credentials for the
- * standard refresh grant, and mirror its request shape and headers.
+ * latter. Login and the embedded oauth client pairs live in
+ * antigravityAuth.ts (`nri provider login antigravity`); here we only run
+ * the standard refresh grant and mirror the request shape and headers.
  */
 
-const TOKEN_PATH = join(homedir(), ".gemini", "antigravity-cli", "antigravity-oauth-token");
 const STATE_PATH = join(homedir(), ".gemini", "antigravity-cli", "jetski_state.pbtxt");
-const AGY_PATH = join(homedir(), ".local", "bin", "agy");
 const CLOUD_CODE = process.env.CLOUD_CODE_URL ?? "https://daily-cloudcode-pa.googleapis.com";
 const USER_AGENT = "antigravity/1.1.6 linux/x64";
 
-interface OauthClient {
-  id: string;
-  secret: string;
-}
-
-let cachedClients: OauthClient[] | null = null;
-
 /**
- * Extract the oauth client id/secret pairs embedded in the agy CLI binary
- * (local state, not hardcoded credentials). Ids and secrets sit in the same
- * order in the string table; pairing is validated at refresh time — a pair
- * rejected with invalid_client is skipped for the next one.
+ * Client pair matching the token's auth_method first (as stored at login),
+ * then the other — a pair rejected with invalid_client is skipped.
  */
-function agyOauthClients(): OauthClient[] {
-  if (cachedClients) return cachedClients;
-  const path = process.env.AGY_PATH ?? AGY_PATH;
-  cachedClients = [];
-  if (existsSync(path)) {
-    const bin = readFileSync(path, "latin1");
-    const ids = [...bin.matchAll(/\d{12}-[a-z0-9]{32}\.apps\.googleusercontent\.com/g)].map((m) => m[0]);
-    const secrets = [...bin.matchAll(/GOCSPX-[A-Za-z0-9_-]{20,}/g)].map((m) => m[0]);
-    cachedClients = ids.slice(0, secrets.length).map((id, i) => ({ id, secret: secrets[i] }));
-  }
-  return cachedClients;
-}
-
-interface TokenFile {
-  token?: {
-    access_token?: string;
-    token_type?: string;
-    refresh_token?: string;
-    expiry?: string; // RFC3339
-  };
-  [key: string]: unknown;
-}
-
-function readTokenFile(): TokenFile | null {
-  if (!existsSync(TOKEN_PATH)) return null;
-  try {
-    return JSON.parse(readFileSync(TOKEN_PATH, "utf8")) as TokenFile;
-  } catch {
-    return null;
-  }
+function clientPairs(): OauthClient[] {
+  const clients = oauthClients();
+  const method = readTokenFile()?.auth_method === "gcp" ? "gcp" : "consumer";
+  const first = clients[method];
+  const second = clients[method === "gcp" ? "consumer" : "gcp"];
+  return [first, second];
 }
 
 /** True when an antigravity oauth token file with a refresh token exists. */
@@ -76,16 +48,17 @@ export function antigravityAvailable(): boolean {
 async function refreshToken(): Promise<string> {
   const file = readTokenFile();
   const refresh = file?.token?.refresh_token;
-  if (!file || !refresh) throw new Error("antigravity refresh_token missing — run `agy` to log in again");
-  const clients = agyOauthClients();
-  if (clients.length === 0) {
-    throw new Error("agy CLI binary not found — install antigravity and run `agy` to log in");
+  if (!file || !refresh) {
+    throw new Error("antigravity refresh_token missing — run `nri provider login antigravity` (or `agy`) to log in again");
   }
   let lastError = "no oauth client pairs";
-  for (const client of clients) {
+  for (const client of clientPairs()) {
     const res = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "Go-http-client/1.1", // agy refreshes via Go's default http client
+      },
       body: new URLSearchParams({
         client_id: client.id,
         client_secret: client.secret,
@@ -96,19 +69,20 @@ async function refreshToken(): Promise<string> {
     if (res.ok) {
       const body = (await res.json()) as { access_token?: string; expires_in?: number; refresh_token?: string };
       if (!body.access_token) throw new Error("antigravity oauth refresh returned no access_token");
-      file.token = {
-        ...file.token,
-        access_token: body.access_token,
-        ...(body.refresh_token ? { refresh_token: body.refresh_token } : {}),
-        expiry: new Date(Date.now() + (body.expires_in ?? 3600) * 1000).toISOString(),
-      };
-      writeFileSync(TOKEN_PATH, JSON.stringify(file, null, 2), { mode: 0o600 });
+      writeTokenFile({
+        token: {
+          ...file.token,
+          access_token: body.access_token,
+          ...(body.refresh_token ? { refresh_token: body.refresh_token } : {}),
+          expiry: new Date(Date.now() + (body.expires_in ?? 3600) * 1000).toISOString(),
+        },
+      });
       return body.access_token;
     }
     lastError = `HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`;
     if (res.status !== 400 && res.status !== 401) break; // server-side — rotating clients won't help
   }
-  throw new Error(`antigravity oauth refresh failed (${lastError}) — run \`agy\` to log in again`);
+  throw new Error(`antigravity oauth refresh failed (${lastError}) — run \`nri provider login antigravity\` (or \`agy\`) to log in again`);
 }
 
 /** Access token, refreshing when missing or within 60s of expiry. */
@@ -152,7 +126,7 @@ export class AntigravityStrategy extends BaseProviderStrategy {
 
   constructor(opts: StrategyOptions = {}) {
     super();
-    if (!antigravityAvailable()) throw new Error("antigravity token not found — run `agy` to log in");
+    if (!antigravityAvailable()) throw new Error("antigravity token not found — run `nri provider login antigravity` (or `agy`) to log in");
     this.model = opts.model ?? process.env.NRI_MODEL ?? "gemini-3-flash";
   }
 

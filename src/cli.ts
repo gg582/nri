@@ -87,7 +87,7 @@ Usage:
   nri "<task>"                      console, with the task pre-submitted
   nri --cli -r "<task>" [options]   one-shot CLI run (explicit opt-in)
   nri help                          this reference
-  nri provider <list|import|add|remove|refresh>   manage providers (also: /provider)
+  nri provider <list|import|login|add|remove|refresh>   manage providers (also: /provider)
   nri model <list|assign|set|reorder|candidates>  per-node model routing (also: /model)
   nri permission <list|set-mode|allow|deny|clear>   execution policy (also: /permission)
   nri yolo [off]                          toggle yolo permission mode (also: /yolo)
@@ -116,6 +116,7 @@ Options (one-shot mode):
 Commands:
   nri provider list                       configured providers (* = credentials available)
   nri provider import [kimi-code|codex|antigravity]   auto-import credentials from existing AI clients
+  nri provider login [antigravity] [consumer|gcp]     browser OAuth login, 1:1 agy CLI mimicry
   nri provider add [name]                 manual interactive entry
   nri provider remove <name>              remove stored credentials
   nri provider refresh [name]             fetch live model lists from provider APIs

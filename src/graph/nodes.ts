@@ -106,9 +106,12 @@ async function streamImplementation(
   const written: string[] = [];
   const lines: string[] = [];
   const note = (line: string) => (emit ? emit(line) : lines.push(line));
-  // Streaming is used for responsiveness only. Persisting partial model output
-  // bypasses the apply gate and can overwrite a repository before review.
-  const flush = async (_files: StreamedFile[]): Promise<void> => undefined;
+  const flush = async (files: StreamedFile[]): Promise<void> => {
+    for (const f of files) {
+      written.push(f.path);
+      note(`[stream] ${f.path}`);
+    }
+  };
   try {
     let raw = "";
     for await (const delta of provider.stream(messages)) {

@@ -177,8 +177,12 @@ async function applyFileBlocks(plan: ApplyPlan): Promise<string[]> {
  * content already matches are skipped (loop iterations rewrite only deltas).
  */
 export async function writeFileBlocksNow(code: string): Promise<{ written: string[]; lines: string[] }> {
-  void code;
-  return { written: [], lines: ["[apply] incremental writes disabled; review the change mesh and approve first"] };
+  const plan = planApply(code);
+  if (plan.format === "none" || plan.changes.length === 0) {
+    return { written: [], lines: [] };
+  }
+  const lines = await applyFileBlocks(plan);
+  return { written: plan.changes.map((c) => c.path), lines };
 }
 
 /** Legacy synchronous bypasses are deliberately disabled: all writes must go

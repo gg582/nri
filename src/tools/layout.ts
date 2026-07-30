@@ -90,7 +90,7 @@ export function relevantFileContents(
   for (const p of extraPaths) push(p);
 
   if (tokens.length > 0) {
-    const scored = existingProjectFiles(process.cwd(), 4, 400)
+    const scored = existingProjectFiles(process.cwd(), 5, 1000)
       .filter(isTextFile)
       .map((p) => {
         const hay = p.toLowerCase();
@@ -103,6 +103,29 @@ export function relevantFileContents(
       .filter((s) => s.score > 0)
       .sort((a, b) => b.score - a.score);
     for (const s of scored) push(s.p);
+  }
+
+  // Codebase graph expansion: find dependencies/imports referenced in top matched files
+  const currentPicked = [...picked];
+  for (const p of currentPicked) {
+    if (picked.length >= maxFiles) break;
+    try {
+      const code = readFileSync(p, "utf8");
+      // Extract import statements e.g. import ... from "./foo.js" or require("./foo")
+      const matches = code.matchAll(/(?:import|require)\s*\(?['"](\.[^'"]+)['"]\)?/g);
+      for (const m of matches) {
+        let target = m[1];
+        if (target.endsWith(".js") && !existsSync(target) && existsSync(target.replace(/\.js$/, ".ts"))) {
+          target = target.replace(/\.js$/, ".ts");
+        }
+        const resolved = join(p, "..", target);
+        if (existsSync(resolved) && statSync(resolved).isFile()) {
+          push(resolved);
+        }
+      }
+    } catch {
+      /* ignore read errors during import graph expansion */
+    }
   }
 
   const out: { path: string; content: string }[] = [];

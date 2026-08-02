@@ -196,7 +196,7 @@ export class Repl {
         maxIterations: 5,
       });
 
-      // HITL loop: the heavy path pauses at human_approval; auto-approve here.
+      // A caller may explicitly configure a human_approval breakpoint.
       for (let i = 0; i < 10; i++) {
         const snap = await graph.getState(config);
         if (!snap.next.includes("human_approval")) break;
@@ -211,13 +211,9 @@ export class Repl {
     if (s.finalOutput) {
       this.push("", s.finalOutput);
     } else {
-      // The graph can end before finalize (pre-flight attempts exhausted) —
-      // say so plainly instead of printing a bare "done" line.
+      // Say plainly when an interrupted or failed run has no final summary.
       const reason =
-        s.preFlight && !s.preFlight.is_business_valid
-          ? `pre-flight rejected the plan after ${s.preFlightAttempts} attempt(s) — ` +
-            (s.preFlight.violation_reason ?? "no reason given")
-          : s.iterationCount >= s.maxIterations
+        s.iterationCount >= s.maxIterations
             ? `iteration limit reached (${s.iterationCount}/${s.maxIterations})`
             : "pipeline ended before finalize";
       this.push(

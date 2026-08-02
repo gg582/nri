@@ -175,11 +175,22 @@ export function makeTriageNode({ provider }: NodeDeps) {
       ],
       TriageResultSchema,
     );
+    // Treat FAST as the default. A broad redesign needs an explicit signal;
+    // otherwise a cautious model can send routine feature/fix work through a
+    // multi-stage approval/audit path before a single file is generated.
+    const request = state.currentRequest ?? "";
+    const explicitlyBroad = /\b(architecture|architectural|rewrite|replatform|migration|monolith|cross[- ]cutting|entire codebase|all modules)\b/i.test(request);
+    const selectedPath = result.selected_path === "HEAVY_PATH" && explicitlyBroad
+      ? "HEAVY_PATH"
+      : "FAST_PATH";
+    const routingNote = selectedPath === result.selected_path
+      ? result.reason
+      : `${result.reason} (downgraded to FAST_PATH: no explicit broad redesign)`;
     return {
-      selectedPath: result.selected_path,
-      triageReason: result.reason,
+      selectedPath,
+      triageReason: routingNote,
       trace: [
-        `[triage] path=${result.selected_path} impact=${result.codebase_impact_ratio} bugfix=${result.is_bugfix} — ${result.reason}`,
+        `[triage] path=${selectedPath} impact=${result.codebase_impact_ratio} bugfix=${result.is_bugfix} — ${routingNote}`,
       ],
     };
   };
@@ -335,10 +346,8 @@ export function makePreFlightNode({ provider }: NodeDeps) {
         trace: ["[pre-flight] valid=true"],
       };
     }
-    // Rejection means the request was underspecified: subdivide it ourselves
-    // by folding the violation into the request, so the re-plan addresses it
-    // instead of repeating the same plan. Incomplete termination is reserved
-    // for genuine exhaustion (attempt guardrail in routeAfterPreFlight).
+    // Preserve the audit finding in the request so implementation can account
+    // for it. The finding is advisory: code generation still proceeds.
     const refinedRequest =
       `${state.currentRequest}\n\n` +
       `Additional requirements identified during plan review (must be addressed): ` +
@@ -349,7 +358,7 @@ export function makePreFlightNode({ provider }: NodeDeps) {
       currentRequest: refinedRequest,
       trace: [
         `[pre-flight] valid=false — ${result.violation_reason ?? "unspecified violation"}`,
-        "[pre-flight] request refined with the missing requirements; re-planning",
+        "[pre-flight] request refined with the audit finding; continuing to implementation",
       ],
     };
   };
@@ -457,14 +466,23 @@ export function makeTestRunnerNode({ provider, testRunner }: NodeDeps) {
         );
       } catch {
         // Fallback if LLM responded with raw text test code
-        const raw = await provider.invoke([
-          { role: "system", content: TEST_WRITER_SYSTEM },
-          {
-            role: "user",
-            content: `Implementation:\n${state.generatedCode}${conversationContextBlock(state)}${businessContextBlock(state)}`,
-          },
-        ]);
-        spec = { test_code: raw };
+        try {
+          const raw = await provider.invoke([
+            { role: "system", content: TEST_WRITER_SYSTEM },
+            {
+              role: "user",
+              content: `Implementation:\n${state.generatedCode}${conversationContextBlock(state)}${businessContextBlock(state)}`,
+            },
+          ]);
+          spec = { test_code: raw };
+        } catch (error) {
+          // Test authoring must not erase an implementation that is already
+          // usable. The runner will still perform its syntax/build fallback.
+          spec = { test_code: "" };
+          // Keep this diagnostic in the test code field only long enough to
+          // avoid a second provider failure; execution continues below.
+          void error;
+        }
       }
     }
 
@@ -624,15 +642,13 @@ export function routeAfterTriage(state: State): "fast_patch" | "business_context
 /**
  * Pre-flight runs on the HEAVY path only, BEFORE code is committed/executed.
  * - valid   -> granular implementation.
- * - invalid -> re-subdivide from the refined request, up to 3 attempts
- *   (loop guardrail), then end the run.
+ * - invalid -> implementation still proceeds, with the audit retained as an
+ *   advisory. An uncertain model audit must not turn an actionable request
+ *   into a no-code run.
  */
 export function routeAfterPreFlight(state: State): "implement" | "decompose" | "__end__" {
-  if (state.preFlight?.is_business_valid) return "implement";
-  if (state.preFlightAttempts >= 3) return "__end__";
-  // Re-subdivide from the refined request (pre_flight folded the violation
-  // into currentRequest) instead of re-proposing blindly.
-  return "decompose";
+  void state;
+  return "implement";
 }
 
 export function routeAfterTests(

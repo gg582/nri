@@ -12,7 +12,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildGraph, resumeNri, runNri } from "../../src/graph/builder.js";
+import { buildGraph, runNri } from "../../src/graph/builder.js";
 import { createProvider } from "../../src/providers/factory.js";
 import { MockTestRunner } from "../../src/tools/testRunner.js";
 
@@ -34,13 +34,8 @@ async function main() {
   const graph = buildGraph({ resolveProvider: () => provider, testRunner: new MockTestRunner() });
   const threadId = `calc-${Date.now()}`;
 
-  let run = await runNri(graph, { request: REQUEST, targetTestCoverage: 80, threadId });
-  let final = run.finalState;
-  for (let i = 0; i < 6 && run.awaitingApproval; i++) {
-    final = await resumeNri(graph, null, threadId);
-    const snap = await graph.getState({ configurable: { thread_id: threadId } });
-    run = { finalState: final, awaitingApproval: snap.next.includes("human_approval") };
-  }
+  const run = await runNri(graph, { request: REQUEST, targetTestCoverage: 80, threadId });
+  const final = run.finalState;
 
   console.log("\n=== trace ===");
   for (const line of final.trace) console.log(" ", line);

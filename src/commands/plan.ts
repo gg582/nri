@@ -7,8 +7,9 @@ import type { AgentStateType } from "../state.js";
 /**
  * /plan — read-only planning run.
  * Runs the pipeline up to (but never past) code implementation/test
- * execution: interrupts before "implement" and "test_runner", auto-approves
- * the HITL breakpoint, then prints the plan and stops. Nothing is executed.
+ * execution: interrupts before "implement" and "test_runner", then prints
+ * the plan and stops. Nothing is executed. Approval breakpoints are opt-in,
+ * so this command does not need to resume one.
  */
 export async function planCommand(args: string[]): Promise<void> {
   const request = args.join(" ").trim();
@@ -22,7 +23,7 @@ export async function planCommand(args: string[]): Promise<void> {
   const config = { configurable: { thread_id: threadId } };
 
   let run = await runNri(graph, { request, targetTestCoverage: 100, threadId });
-  // Auto-approve the heavy-path HITL breakpoint so the plan completes.
+  // Retained for callers that explicitly add a human_approval interrupt.
   for (let i = 0; i < 4 && run.awaitingApproval; i++) {
     await resumeNri(graph, null, threadId);
     const snap = await graph.getState(config);

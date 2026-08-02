@@ -4,7 +4,7 @@
  * Run: npx tsx examples/smoke.ts
  */
 import { z } from "zod";
-import { buildGraph, runNri, resumeNri } from "../src/graph/builder.js";
+import { buildGraph, runNri } from "../src/graph/builder.js";
 import { MockTestRunner } from "../src/tools/testRunner.js";
 import { extractJson, type ChatMessage, type LLMProviderStrategy } from "../src/providers/base.js";
 import { TriageResultSchema } from "../src/state.js";
@@ -122,17 +122,10 @@ async function main() {
   if (fast.finalState.selectedPath !== "FAST_PATH") throw new Error("expected FAST_PATH");
   if (fast.finalState.currentTestCoverage < 80) throw new Error("coverage target not met");
 
-  console.log("\n--- HEAVY_PATH run with HITL resume ---");
+  console.log("\n--- HEAVY_PATH run (generation-first, no default pause) ---");
   const heavy = await runNri(graph, { request: "HEAVY refactor the entire codebase", targetTestCoverage: 80, threadId: "smoke-heavy" });
-  if (!heavy.awaitingApproval) throw new Error("expected HITL interrupt on HEAVY_PATH");
-  console.log("interrupted at:", heavy.finalState.trace.at(-1));
-  let final = heavy.finalState;
-  // HITL fires on every heavy-path iteration; approve repeatedly until done.
-  for (let resumes = 0; resumes < 6; resumes++) {
-    final = await resumeNri(graph, null, "smoke-heavy");
-    const snapshot = await graph.getState({ configurable: { thread_id: "smoke-heavy" } });
-    if (!snapshot.next.includes("human_approval")) break;
-  }
+  if (heavy.awaitingApproval) throw new Error("HEAVY_PATH should not pause without an explicit breakpoint");
+  const final = heavy.finalState;
   console.log("path:", final.selectedPath, "| coverage:", final.currentTestCoverage);
   console.log(final.trace.join("\n"));
   if (final.selectedPath !== "HEAVY_PATH") throw new Error("expected HEAVY_PATH");

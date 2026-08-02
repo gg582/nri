@@ -16,8 +16,8 @@ export interface UiRunOptions {
 
 /**
  * Drive the nri pipeline with the ink TUI.
- * Streams node-level updates out of LangGraph into the UI, pauses at the
- * HITL breakpoint until the user approves (y) or rejects (n).
+ * Streams node-level updates out of LangGraph into the UI. Normal runs do not
+ * pause before implementation; a caller may add an explicit HITL breakpoint.
  * Returns the process exit code: 0 = coverage target met, 2 = rejected, 3 = missed.
  */
 export async function runWithUi(opts: UiRunOptions): Promise<number> {
@@ -112,7 +112,7 @@ export async function runWithUi(opts: UiRunOptions): Promise<number> {
   let final = (await graph.getState(config)).values as AgentStateType;
   let exitCode = 0;
 
-  // HITL loop: every heavy-path iteration pauses at human_approval.
+  // Handle an explicitly configured HITL breakpoint if one is present.
   for (let guard = 0; guard < 10; guard++) {
     const snap = await graph.getState(config);
     if (!snap.next.includes("human_approval")) break;

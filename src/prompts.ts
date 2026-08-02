@@ -38,11 +38,13 @@ possible: no drive-by refactors, no renames, no reformats of untouched code,
 no edits to unrelated files.
 Never create a duplicate copy of a file under a different directory (e.g. both
 src/foo.cpp and MyApp/src/foo.cpp) — modify the existing file at its path.
-Safety contract: decompose the work by exact existing path and language before
-writing. A complete rewrite of one identified file is allowed when needed; do
-not create parallel copies, guessed paths/imports/APIs, or ungrounded files.
-If the supplied layout does not identify the target, return an empty code string
-and explain why.
+Safety contract: use exact existing paths when they are available. A complete
+rewrite of one identified file is allowed when needed; do not create parallel
+copies or unrelated drive-by changes. When the request is for a new project or
+the target file cannot be inferred from the layout, choose one conventional,
+repo-relative source path and implement the requested working baseline there.
+Never return an empty code string for an actionable coding request: make the
+best concrete implementation and state any assumptions in notes.
 
 Format the code as file blocks: concatenate every file you produce, each
 starting with a comment line holding its repo-relative path, e.g.
@@ -140,9 +142,10 @@ Fill in the detailed implementation by traversing the abstract graph's primal no
    or renaming of code the plan does not mention.
 Safety contract: preserve unrelated exports and behavior. First decompose by
 identified path and language, then produce only the required dependency stages.
-Large coherent rewrites are allowed; guessed imports, paths, dependencies, and
-parallel copies of modules are not. Return no code when the target cannot be
-grounded in the listed workspace layout.
+Large coherent rewrites are allowed. When the workspace does not identify a
+target, choose a conventional repo-relative source path and provide a complete
+working baseline rather than refusing to generate code. Never return an empty
+code string for an actionable coding request; record assumptions in notes.
 
 Format the code as file blocks: concatenate every file you produce, each
 starting with a comment line holding its repo-relative path, e.g.

@@ -50,8 +50,7 @@ export interface GraphDeps {
  *   triage ─┬─ FAST:  fast_patch ───────────────────────────► test_runner
  *           └─ HEAVY: business_context -> decompose ->
  *                     abstract_graph -> proposal -> human_approval ->
- *                     pre_flight ──valid──► implement -> evaluate -> test_runner
- *                               invalid -> re-plan (max 3 attempts)
+ *                     pre_flight ──advisory──► implement -> evaluate -> test_runner
  *   test_runner -> coverage >= target ? visual -> docs? -> finalize -> END
  *                  else loop (fast_patch | decompose)
  *
@@ -60,7 +59,7 @@ export interface GraphDeps {
  * generated only when the request asks for it.
  */
 export interface BuildGraphOptions {
-  /** Extra nodes to interrupt before (in addition to human_approval). */
+  /** Nodes to interrupt before. `human_approval` is opt-in. */
   interruptBefore?: string[];
   /** Force graph reversal mode regardless of config (default: config.reverse). */
   reverse?: boolean | "on" | "off" | "auto";
@@ -179,7 +178,10 @@ export function buildGraph(deps: GraphDeps, opts?: BuildGraphOptions) {
   }
 
   const checkpointer = new MemorySaver();
-  const interruptBefore = [...new Set(["human_approval", ...(opts?.interruptBefore ?? [])])];
+  // Approval is opt-in for library callers. Interrupting every HEAVY request
+  // before implementation made ordinary autonomous runs end with no code.
+  // Interactive callers can still request this breakpoint explicitly.
+  const interruptBefore = [...new Set(opts?.interruptBefore ?? [])];
   // LangGraph types interruptBefore as a union of node-name literals; our
   // names are valid but computed, hence the single cast.
   return graph.compile({ checkpointer, interruptBefore: interruptBefore as never });
@@ -196,13 +198,13 @@ export interface NriRunInput {
 
 export interface NriRunResult {
   finalState: AgentStateType;
-  /** True when execution stopped at the HITL breakpoint and awaits approval. */
+  /** True when execution stopped at an explicit human_approval breakpoint. */
   awaitingApproval: boolean;
 }
 
 export type CompiledNriGraph = ReturnType<typeof buildGraph>;
 
-/** Start (or resume) a run. Stops at the HITL breakpoint on the heavy path. */
+/** Start (or resume) a run. Stops only at explicitly configured breakpoints. */
 export async function runNri(graph: CompiledNriGraph, input: NriRunInput): Promise<NriRunResult> {
   const config = { configurable: { thread_id: input.threadId ?? "nri-session" } };
   await graph.invoke(
@@ -227,8 +229,9 @@ export async function runNri(graph: CompiledNriGraph, input: NriRunInput): Promi
 }
 
 /**
- * Resume after the HITL breakpoint. Pass an edited ProposalGraph to apply
- * user modifications before continuing, or null to approve as-is.
+ * Resume after an explicit human_approval breakpoint. Pass an edited
+ * ProposalGraph to apply user modifications before continuing, or null to
+ * approve as-is.
  */
 export async function resumeNri(
   graph: CompiledNriGraph,

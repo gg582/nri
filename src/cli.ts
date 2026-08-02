@@ -61,7 +61,7 @@ function parseArgs(): CliArgs {
         break;
       case "--yolo":
         args.yolo = true;
-        args.autoApprove = true; // yolo implies HITL auto-approve too
+        args.autoApprove = true; // kept for compatibility with explicit breakpoints
         break;
       case "--ui":
         args.ui = true;
@@ -111,7 +111,7 @@ Options (one-shot mode):
       --dump-state <path> write final run state JSON (for /compact, /graph-compact)
       --locale <code>     final output locale (us/en-US default, uk/gb, au, ie, ko, ja, ...)
       --yolo              apply detected changes without asking (yolo permission mode)
-  -y, --yes               auto-approve the HITL proposal-graph review
+  -y, --yes               legacy compatibility flag (normal runs have no approval pause)
       --ui                run with the ink TUI (seoulism theme)
   -h, --help              show this help
 
@@ -288,7 +288,7 @@ async function main(): Promise<void> {
 
   let final = run.finalState;
 
-  // HITL fires on EVERY heavy-path iteration — loop until no breakpoint remains.
+  // Continue only when the caller explicitly configured an approval breakpoint.
   for (let guard = 0; guard < 10 && run.awaitingApproval; guard++) {
     stdout.write("\n=== HITL: proposal graph review (HEAVY_PATH) ===\n");
     stdout.write(JSON.stringify(final.proposalGraph, null, 2) + "\n");

@@ -62,13 +62,13 @@ function parseUnifiedDiff(text: string): FileChange[] {
 }
 
 /**
- * File-block path markers. Directory-prefixed paths (src/foo.cpp) always
- * count; root-level files count only for doc/config extensions (README.md,
- * config.toml, ...) so a code comment like `// foo.py` can never split a
- * source file. Used by parseFileBlocks and the incremental stream parser.
+ * File-block path markers. Both directory-prefixed and root-level source
+ * paths count. Models frequently create small projects as `main.py` or
+ * `index.ts`; rejecting those markers made otherwise valid generated code
+ * impossible to apply or verify. Used by parseFileBlocks and the incremental
+ * stream parser.
  */
-export const FILE_MARKER_PATTERN =
-  "(?:[\\w.-]+\\/)+[\\w.-]+\\.\\w+|[\\w.-]+\\.(?:md|markdown|txt|toml|ya?ml|json|cfg|ini|mk)";
+export const FILE_MARKER_PATTERN = "(?:(?:[\\w.-]+\\/)*[\\w.-]+\\.[A-Za-z0-9]+)";
 
 /** Detect full-file blocks. Recognized markers:
  *   ```ts\n// src/foo.ts\n... ```  |  // src/foo.ts\n<code lines>

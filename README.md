@@ -2,12 +2,12 @@
 
 ![Logo](./logo.png)
 
-**Adaptive agentic-engineering harness** — a LangGraph-based agent that routes
-each request through a triage layer into a lightweight **FAST_PATH** patch loop
-or a full **HEAVY_PATH** tree-decomposition loop, validates every plan against
-your business rules *before* code is written, iterates until a test-coverage
-target is met, and applies the resulting diff back to your repo with a single
-`y` (or hands-free in yolo mode).
+**Adaptive agentic-engineering harness** — a LangGraph-based agent that
+generates a concrete implementation first, then verifies and refines it. Most
+requests use a lightweight **FAST_PATH** patch loop; explicit broad redesigns
+use the **HEAVY_PATH** planning chain. Business review informs the result but
+does not suppress code generation, and applicable changes can be applied back
+to your repo with a single `y` (or hands-free in yolo mode).
 
 - npm: [`@gg582/nri`](https://www.npmjs.com/package/@gg582/nri)
 - git: [`gg582/nri`](https://github.com/gg582/nri)
@@ -23,21 +23,21 @@ git clone https://github.com/gg582/nri.git && cd nri && npm install && npm run b
 Most coding agents improvise their way through a repo. nri runs a deliberate
 pipeline instead:
 
-- **Right-sized rigor** — a Step-0 triage scores each request
-  (`is_bugfix`, `codebase_impact_ratio`) and sends small fixes down a cheap
-  FAST loop (patch → verify) and architectural work down the full HEAVY loop.
-  You don't pay tree-of-thought prices for a one-line patch.
-- **Business logic is a first-class gate** — on the HEAVY path, a
-  contextualization node extracts domain constraints and impacted flows up
-  front, and a **pre-flight auditor** simulates the plan against them *before*
-  any code is committed. Patches that merely chase coverage numbers while
-  breaking domain rules are rejected.
+- **Generation-first routing** — FAST is the default for actionable requests.
+  HEAVY is reserved for explicit broad redesigns such as architecture rewrites
+  and migrations, so ordinary fixes and features reach implementation without
+  planning or approval bottlenecks.
+- **Business logic as guidance** — on the HEAVY path, contextualization and a
+  **pre-flight audit** still surface domain constraints and risks before
+  implementation. A negative audit is retained in the trace as an advisory;
+  it does not end a run without generated code.
 - **Abstract-graph planning** — task trees are clustered into primal nodes
   with I/O contracts; cycles are detected and linearized before detailed
   planning. Cheaper tokens, no runaway loops.
-- **Coverage-driven termination** — loops stop at a *measured* test-coverage
-  target (via MCP tool calls or your own test command), with iteration and
-  pre-flight guardrails, not at "looks good to me".
+- **Verification-driven refinement** — loops refine an implementation until
+  the configured coverage target is met or the iteration limit is reached.
+  When a language or toolchain cannot be evaluated, NRI keeps the generated
+  code and reports the unevaluable verification instead of blindly looping.
 - **It acts like an agent, not a printer** — detected changes (unified diff or
   file blocks) are summarized and applied with `y/n`, or automatically in
   `yolo` mode, with path sandboxing and automatic `.nri-backup/` snapshots.
@@ -56,7 +56,7 @@ pipeline instead:
   pipeline stage and import credentials from clients they already use
   (kimi-code, codex).
 - **Agent-framework builders** looking for a readable reference harness:
-  triage routing, HITL checkpoints, pre-flight audits, MCP tool integration,
+  triage routing, opt-in breakpoints, pre-flight audits, MCP tool integration,
   context compaction — all in plain TypeScript.
 
 If you want a zero-friction autocomplete, this is not that. nri is a harness
@@ -77,7 +77,9 @@ nri help                             # full CLI reference (also: --help)
 One-shot output is opt-in via `--cli`; everything else opens the console.
 Dry runs without a test suite: `NRI_TEST_MODE=mock nri --cli ...`
 Real coverage: point `NRI_MCP_SERVER_COMMAND` at an MCP server with a coverage
-tool, or set `NRI_TEST_COMMAND` (default `npm test -- --coverage`).
+tool, or set `NRI_TEST_COMMAND` to the command that measures your project.
+Without an explicit command, NRI uses language-appropriate build/syntax checks
+and treats a successful check as 100% for its loop contract.
 
 ## The pipeline
 
@@ -88,22 +90,22 @@ raw request
 
 FAST   fast_patch ────────────────────────────────────────────► test_runner
 HEAVY  business_context ──► decompose ──► abstract_graph ──► proposal
-              ▲                            ──► human_approval (HITL) ──► pre_flight
-              │                                                     valid │
-              └──── synthesis question ◄── evaluate ◄─ implement ◄────────┘
-                                            invalid → re-plan (≤3)
+                                                           ──► pre_flight (advisory) ──► implement ──► evaluate
+                                                                                                      │
+              └────────────────────────────────────────── synthesis question ◄───────────────────────┘
 test_runner ── coverage ≥ target ? ──► visual? ──► docs? ──► finalize ──► END
-                     └ no ──► loop (fast_patch | decompose)
+                     └ no ──► loop (fast_patch | decompose; bounded by --max-iterations)
 finalize          localized final output (--locale / NRI_LOCALE / config);
                   English locales skip the egress call
 ```
 
 Token discipline is deliberate: English requests skip normalization, FAST
-skips the business-context/pre-flight chain (reserved for HEAVY work), the
-test spec is generated once per run (not per iteration), docs are generated
-only when the request asks for them, and implementation prompts are grounded
-in the *current contents* of the files the request refers to — the model
-patches real code instead of hallucinating against a file-name list.
+skips the business-context/pre-flight chain (reserved for explicit HEAVY
+work), the test spec is generated once per run (not per iteration), docs are
+generated only when the request asks for them, and implementation prompts are
+grounded in the *current contents* of relevant files. For a new project or an
+ambiguous target, the model chooses a conventional repo-relative source file
+instead of returning an empty implementation.
 
 Latency is bounded, not best-effort: every LLM call has a per-call timeout
 (`NRI_CALL_TIMEOUT_MS`, default 120s), SDK-internal retries are disabled so
@@ -133,9 +135,11 @@ inside `nri tui`.
 | `nri help` | CLI reference |
 
 Key run flags: `-p/--provider`, `-m/--model`, `-c/--coverage`,
-`--max-iterations`, `--locale <code>`, `--dump-state <path>`, `-y/--yes`
-(auto-approve HITL), `--yolo` (apply changes without asking), `--ui`
-(seoulism-themed live dashboard).
+`--max-iterations`, `--locale <code>`, `--dump-state <path>`, `--yolo`
+(apply changes without asking), `--ui` (seoulism-themed live dashboard).
+Library users may opt into a review pause by passing
+`interruptBefore: ["human_approval"]` to `buildGraph`; normal CLI and UI runs
+do not pause before implementation.
 
 ## Applying changes safely (y/n, yolo, refine loop)
 
@@ -144,13 +148,13 @@ offers to apply them to your working directory:
 
 - **unified diff** → applied via `git apply --whitespace=fix`
 - **full-file blocks** (```` ```ts // src/foo.ts ```` or bare `// path/file`
-  sections) → written directly
+  / `// main.py` sections) → written directly
 - paths are sandboxed to the cwd (absolute/`..` rejected); overwritten files
   are backed up to `.nri-backup/<timestamp>/` first
 
 Gating follows the permission mode: `auto` (default) shows a per-file summary
-and asks `y/N`; `yolo` applies immediately (`--yolo` forces it per run and
-implies HITL auto-approve); `plan` never applies. The same gate runs inside
+and asks `y/N`; `yolo` applies immediately (`--yolo` forces it per run);
+`plan` never applies. The same gate runs inside
 `nri tui` as an in-console prompt.
 
 ### Anti-hallucination refine loop

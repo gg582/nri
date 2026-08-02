@@ -17,4 +17,11 @@ describe("apply tool test", () => {
     assert.equal(plan.format, "none");
     assert.equal(plan.changes.length, 0);
   });
+
+  it("parses a root-level source file block", () => {
+    const plan = planApply("// main.py\nprint('hello')\n");
+    assert.equal(plan.format, "file-blocks");
+    assert.deepEqual(plan.changes.map((change) => change.path), ["main.py"]);
+    assert.equal(plan.changes[0].content.trim(), "print('hello')");
+  });
 });

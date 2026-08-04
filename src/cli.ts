@@ -131,7 +131,7 @@ Commands:
 Environment:
   NRI_TEST_MODE=mock      simulate coverage without a real test suite
   NRI_TEST_COMMAND=...    shell command used to measure real coverage
-  NRI_WORKSPACE=...       directory for generated code (default: .nri-workspace)
+  NRI_WORKSPACE=...       directory for generated code (default: current directory)
   NRI_MCP_SERVER_COMMAND  MCP server command for coverage measurement
   NRI_MCP_SERVER_ARGS     MCP server arguments
   NRI_MCP_TOOL            MCP tool name override (default: first *coverage*|*test* tool)

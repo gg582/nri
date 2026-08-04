@@ -44,10 +44,10 @@ const registry: Record<ProviderName, (opts: StrategyOptions) => LLMProviderStrat
     o.apiKey || o.auth !== "codex-oauth" || !codexAuthAvailable()
       ? new OpenAIStrategy(o)
       : new CodexStrategy(o),
-  // Prefer the Gemini API when a key is available; retain antigravity oauth
-  // as a fallback for installations that only have agy credentials.
+  // Gemini API is opt-in because API calls may incur charges. When disabled,
+  // retain the existing antigravity oauth route.
   gemini: (o) =>
-    (o.apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY)
+    loadConfig().geminiApi === true
       ? new GeminiStrategy(o)
       : o.auth === "antigravity-oauth" && antigravityAvailable()
         ? new AntigravityStrategy(o)

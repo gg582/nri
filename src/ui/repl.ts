@@ -2,7 +2,7 @@ import { buildGraph } from "../graph/builder.js";
 import { makeProviderResolver } from "../providers/resolver.js";
 import { createTestRunner } from "../tools/factory.js";
 import type { AgentStateType } from "../state.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, saveGlobalConfig } from "../config.js";
 import { normalizeReverseMode } from "../graph/direction.js";
 import { cleanupVisualTemps } from "../tools/visual.js";
 import { compressConversation } from "../context/conversation.js";
@@ -31,6 +31,7 @@ export const HELP_LINES = [
   "  /yolo [off]                       toggle yolo mode (gates off, advisory only)",
   "  /thinking show|hide               toggle pipeline reasoning output",
   "  /reverse on|off|auto               graph reversal (auto = flip only on overwhelming static signal; default)",
+  "  /gemini-api on|off                 opt in/out of billable Gemini API calls",
   "  /plan <request>                 read-only plan, nothing executed",
   "  /goal set \"<obj>\" [--done-when X --budget N] | status | run | clear",
   "  /swarm [--providers a,b] [--coverage N] <request>",
@@ -323,6 +324,21 @@ export class Repl {
       case "reverse": {
         const { reverseCommand } = await import("../commands/reverse.js");
         this.push(...(await capture(() => reverseCommand(rest))));
+        return;
+      }
+      case "gemini-api": {
+        const value = rest[0]?.toLowerCase();
+        if (value !== "on" && value !== "off" && value !== "status") {
+          this.push("usage: /gemini-api on|off|status");
+          return;
+        }
+        if (value === "status") {
+          this.push(`gemini API: ${loadConfig().geminiApi === true ? "on" : "off"}`);
+          return;
+        }
+        const enabled = value === "on";
+        saveGlobalConfig({ geminiApi: enabled });
+        this.push(`gemini API: ${enabled ? "on (billable API key route)" : "off (Antigravity oauth route)"}`);
         return;
       }
       case "plan": {

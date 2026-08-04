@@ -27,6 +27,8 @@ export interface RoutingConfig {
 
 export interface NriConfig {
   locale?: string;
+  /** Use billable Gemini API calls instead of the Antigravity oauth route. */
+  geminiApi?: boolean;
   /**
    * Providers that must never be used, even when credentials exist.
    * Blocked providers are excluded from auto-selection and routing pools,
@@ -73,6 +75,7 @@ function readJson(path: string): NriConfig {
 function merge(base: NriConfig, over: NriConfig): NriConfig {
   return {
     locale: over.locale ?? base.locale,
+    geminiApi: over.geminiApi ?? base.geminiApi,
     blockedProviders: over.blockedProviders ?? base.blockedProviders,
     reverse: over.reverse ?? base.reverse,
     providers: { ...base.providers, ...over.providers },

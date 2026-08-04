@@ -44,12 +44,14 @@ const registry: Record<ProviderName, (opts: StrategyOptions) => LLMProviderStrat
     o.apiKey || o.auth !== "codex-oauth" || !codexAuthAvailable()
       ? new OpenAIStrategy(o)
       : new CodexStrategy(o),
-  // Gemini via antigravity oauth (imported): uses the agy CLI's Code Assist
-  // quota, not the Gemini API-key quota.
+  // Prefer the Gemini API when a key is available; retain antigravity oauth
+  // as a fallback for installations that only have agy credentials.
   gemini: (o) =>
-    o.auth === "antigravity-oauth" && antigravityAvailable()
-      ? new AntigravityStrategy(o)
-      : new GeminiStrategy(o),
+    (o.apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY)
+      ? new GeminiStrategy(o)
+      : o.auth === "antigravity-oauth" && antigravityAvailable()
+        ? new AntigravityStrategy(o)
+        : new GeminiStrategy(o),
   // Kimi via kimi-code oauth: re-reads the CLI's credential file per call
   // and refreshes on 401, instead of a stale import-time snapshot.
   kimi: (o) =>

@@ -89,8 +89,8 @@ export function stripCodeFence(text: string): string {
 }
 
 /**
- * Real runner: materializes the generated files into a workspace directory
- * and verifies them with a language-appropriate check:
+ * Real runner: materializes generated files directly into the current project
+ * directory and verifies them with a language-appropriate check:
  *   python — pytest when the model wrote pytest tests (else py_compile)
  *   cpp    — g++ -fsyntax-only
  *   ts     — npx tsc --noEmit
@@ -105,7 +105,8 @@ export function stripCodeFence(text: string): string {
  */
 export class ShellTestRunner implements TestRunner {
   constructor(
-    private readonly workspace = process.env.NRI_WORKSPACE ?? ".nri-workspace",
+    /** The project directory to update and verify. Defaults to the process cwd. */
+    private readonly workspace = process.cwd(),
     private readonly command = process.env.NRI_TEST_COMMAND,
   ) {}
 
@@ -141,7 +142,9 @@ export class ShellTestRunner implements TestRunner {
       typeof testInput === "string" ? { testCode: testInput } : testInput;
     const tests = spec.testCode;
 
-    const dir = join(this.workspace, `iter-${iteration}`);
+    // Keep generated files in the target project.  A per-iteration workspace
+    // made verified changes invisible to the user until a separate apply step.
+    const dir = this.workspace;
     await mkdir(dir, { recursive: true });
     if (this.command) return this.runLegacy(dir, code, tests);
 

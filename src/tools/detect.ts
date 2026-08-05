@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { ParsedChangeRequest, DetectedSimpleChange, DetectedIndicator, SimpleChangeCategory } from '../graph/nodes.js';
 
 const KEYWORD_MAP: Record<SimpleChangeCategory, string[]> = {
@@ -18,6 +20,22 @@ const KEYWORD_MAP: Record<SimpleChangeCategory, string[]> = {
     'capitalization', 'case',
   ],
 };
+
+export function detectLocalSourceCode(dir: string = "."): string[] {
+  const results: string[] = [];
+  if (!fs.existsSync(dir)) return results;
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "coverage") continue;
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...detectLocalSourceCode(fullPath));
+    } else if (/\.(js|ts|jsx|tsx|py|rs|go|c|cpp|h|java|rb|php)$/i.test(entry.name)) {
+      results.push(fullPath);
+    }
+  }
+  return results;
+}
 
 export function detect(parsed: ParsedChangeRequest): DetectedSimpleChange {
   const text = `${parsed.changeDescription} ${parsed.businessContext}`.toLowerCase();

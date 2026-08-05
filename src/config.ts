@@ -61,7 +61,10 @@ export interface NriConfig {
 }
 
 export const GLOBAL_CONFIG_PATH = storePaths().configFile;
-export const CWD_CONFIG_PATH = join(process.cwd(), "nri.config.json");
+/** The project config belongs to the working directory at load time. */
+export function cwdConfigPath(): string {
+  return join(process.cwd(), "nri.config.json");
+}
 
 function readJson(path: string): NriConfig {
   if (!existsSync(path)) return {};
@@ -99,7 +102,7 @@ function merge(base: NriConfig, over: NriConfig): NriConfig {
 
 /** Load config: global (~/.config/nri/config.json) merged with cwd (nri.config.json). */
 export function loadConfig(): NriConfig {
-  return merge(readJson(GLOBAL_CONFIG_PATH), readJson(CWD_CONFIG_PATH));
+  return merge(readJson(GLOBAL_CONFIG_PATH), readJson(cwdConfigPath()));
 }
 
 /** Persist a partial config to the global config file (deep-merged). */

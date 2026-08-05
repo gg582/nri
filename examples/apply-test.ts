@@ -52,6 +52,10 @@ async function main() {
   const cwd = process.cwd();
   process.chdir(dir);
   try {
+    // Keep this test independent from the user's global permission mode.
+    // (The yolo cases below opt in explicitly.)
+    writeFileSync(join(dir, "nri.config.json"), JSON.stringify({ permissions: { mode: "auto" } }));
+
     // file-blocks via yolo
     const lines1 = await offerApply(BLOCKS, async () => false, { yolo: true });
     console.log(lines1.join("\n"));

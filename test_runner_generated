@@ -1,0 +1,126 @@
+import { execute, executePython3Test } from '../src/tools/execute.js';
+import * as applyModule from '../src/tools/apply.js';
+import child_process from 'child_process';
+import fs from 'fs';
+
+jest.mock('child_process');
+jest.mock('fs');
+jest.mock('../src/tools/apply.js');
+
+describe('executePython3Test', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('should return success true when initial command succeeds', () => {
+    (child_process.execSync as jest.Mock).mockReturnValue('test passed');
+
+    const res = executePython3Test('python3 -m unittest', '.venv');
+    expect(res).toEqual({ success: true, output: 'test passed' });
+    expect(child_process.execSync).toHaveBeenCalledWith('python3 -m unittest', { encoding: 'utf-8', stdio: 'pipe' });
+  });
+
+  it('should fallback to venv when initial command fails', () => {
+    (child_process.execSync as jest.Mock)
+      .mockImplementationOnce(() => { throw new Error('python3 not found'); })
+      .mockImplementationOnce(() => 'test passed in venv');
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+
+    const res = executePython3Test('python3 -m unittest', '.venv');
+    expect(fs.existsSync).toHaveBeenCalledWith('.venv');
+    expect(res).toEqual({ success: true, output: 'test passed in venv' });
+  });
+
+  it('should return success false if venv execution also fails', () => {
+    (child_process.execSync as jest.Mock).mockImplementation(() => {
+      const err: any = new Error('Venv error');
+      err.stdout = 'Test failed in venv';
+      throw err;
+    });
+    (fs.existsSync as jest.Mock).mockReturnValue(true);
+
+    const res = executePython3Test('python3 -m unittest', '.venv');
+    expect(res).toEqual({ success: false, output: 'Test failed in venv' });
+  });
+});
+
+describe('execute', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('should execute quick-diff-patch path with replace, insert, and delete edits', async () => {
+    (fs.readFileSync as jest.Mock).mockImplementation((file: string) => {
+      if (file === 'file1.txt') return 'hello world\nline two';
+      if (file === 'file3.txt') return 'line to delete\nother line';
+      return '';
+    });
+
+    const taskGroup = {
+      id: 'tg-1',
+      filesToModify: ['file1.txt', 'file2.txt', 'file3.txt'],
+      editOperations: [
+        { type: 'replace' as const, file: 'file1.txt', oldText: 'hello', newText: 'hi' },
+        { type: 'insert' as const, file: 'file2.txt', newText: 'inserted line' },
+        { type: 'delete' as const, file: 'file3.txt', oldText: 'line to delete' },
+      ],
+    };
+
+    const res = await execute(taskGroup, 'quick-diff-patch');
+    expect(res.success).toBe(true);
+    expect(res.appliedFiles).toEqual(taskGroup.filesToModify);
+    expect(res.diff).toContain('--- a/file1.txt');
+    expect(res.diff).toContain('+hi world');
+    expect(res.diff).toContain('--- a/file2.txt');
+    expect(res.diff).toContain('+inserted line');
+    expect(res.diff).toContain('--- a/file3.txt');
+    expect(res.diff).toContain('-line to delete');
+    expect(applyModule.applyQuickDiffPatch).toHaveBeenCalled();
+  });
+
+  it('should handle quick-diff-patch failure when applyQuickDiffPatch throws', async () => {
+    (applyModule.applyQuickDiffPatch as jest.Mock).mockImplementation(() => {
+      throw new Error('Patch error');
+    });
+
+    const taskGroup = {
+      id: 'tg-1',
+      filesToModify: ['file1.txt'],
+      editOperations: [],
+    };
+
+    const res = await execute(taskGroup, 'quick-diff-patch');
+    expect(res.success).toBe(false);
+    expect(res.errors).toContain('Error: Patch error');
+  });
+
+  it('should execute non quick-diff-patch path successfully', async () => {
+    (child_process.execSync as jest.Mock).mockReturnValue('OK');
+
+    const taskGroup = {
+      id: 'tg-1',
+      filesToModify: [],
+      editOperations: [],
+    };
+
+    const res = await execute(taskGroup, 'decision-graph');
+    expect(res.success).toBe(true);
+    expect(child_process.execSync).toHaveBeenCalledWith('npm run decision-graph', { stdio: 'inherit' });
+  });
+
+  it('should handle failure in non quick-diff-patch path', async () => {
+    (child_process.execSync as jest.Mock).mockImplementation(() => {
+      throw new Error('Command failed');
+    });
+
+    const taskGroup = {
+      id: 'tg-1',
+      filesToModify: [],
+      editOperations: [],
+    };
+
+    const res = await execute(taskGroup, 'decision-graph');
+    expect(res.success).toBe(false);
+    expect(res.errors).toContain('Error: Command failed');
+  });
+});

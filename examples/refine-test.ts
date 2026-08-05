@@ -50,6 +50,8 @@ async function main() {
   process.chdir(dir);
   try {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { zod: "^3" } }));
+    // Keep auto-mode assertions independent from the user's global config.
+    writeFileSync(join(dir, "nri.config.json"), JSON.stringify({ permissions: { mode: "auto" } }));
 
     // 1. clean input -> flags empty, no LLM call
     const stub = new StubProvider("unused");

@@ -1,0 +1,16 @@
+{
+  "name": "nri",
+  "version": "1.0.0",
+  "description": "NRI System CLI",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "nri": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+    "deploy": "./deploy.sh",
+    "test": "jest"
+  }
+}

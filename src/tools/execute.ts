@@ -39,6 +39,27 @@ function generateDiffFromEdits(taskGroup: TaskGroup): string {
   return hunks.join('\n');
 }
 
+export function executePython3Test(testCommand: string = 'python3 -m unittest', venvDir: string = '.venv'): { success: boolean; output: string } {
+  try {
+    const output = execSync(testCommand, { encoding: 'utf-8', stdio: 'pipe' });
+    return { success: true, output };
+  } catch (_err) {
+    try {
+      if (!fs.existsSync(venvDir)) {
+        execSync(`python3 -m venv ${venvDir}`, { stdio: 'pipe' });
+      }
+      const venvPython = process.platform === 'win32'
+        ? `${venvDir}\\Scripts\\python.exe`
+        : `${venvDir}/bin/python`;
+      const venvCmd = testCommand.replace(/^python3?\b/, venvPython);
+      const output = execSync(venvCmd, { encoding: 'utf-8', stdio: 'pipe' });
+      return { success: true, output };
+    } catch (venvErr: any) {
+      return { success: false, output: String(venvErr.stdout || venvErr.message || venvErr) };
+    }
+  }
+}
+
 export async function execute(taskGroup: TaskGroup, path: ExecutionPath): Promise<ExecutionResult> {
   const result: ExecutionResult = {
     path,

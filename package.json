@@ -1,7 +1,61 @@
 {
-  "dependencies": {},
+  "name": "@gg582/nri",
+  "version": "0.2.0",
+  "description": "Adaptive agentic engineering harness: triage-routed dual-path (FAST/HEAVY) agent with business-logic pre-flight validation, abstract-graph planning, coverage-driven loops and self-applying diffs. Built on LangGraph.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "nri": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gg582/nri.git"
+  },
+  "homepage": "https://github.com/gg582/nri#readme",
+  "bugs": "https://github.com/gg582/nri/issues",
+  "keywords": [
+    "ai-agent",
+    "agent-harness",
+    "langgraph",
+    "llm",
+    "code-generation",
+    "refactoring",
+    "multi-provider",
+    "mcp"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@langchain/anthropic": "^0.3.20",
+    "@langchain/core": "^0.3.58",
+    "@langchain/deepseek": "^0.1.0",
+    "@langchain/google-genai": "^0.2.16",
+    "@langchain/langgraph": "^0.2.66",
+    "@langchain/openai": "^0.5.10",
+    "@langchain/xai": "^0.1.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ink": "^7.1.1",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.2.8",
+    "zod": "^3.24.2"
+  },
   "devDependencies": {
-    "@vitest/coverage-v8": "^3.2.4",
-    "vitest": "^3.2.4"
+    "@types/node": "^22.14.0",
+    "@types/react": "^19.2.17",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
   }
 }

@@ -7,11 +7,23 @@ import type { ApplyPlan, FileChange } from "./apply.js";
  * against the real repo, no LLM involved.
  */
 
-const NODE_BUILTINS = new Set([
-  "fs", "path", "os", "util", "child_process", "readline", "process", "events",
-  "stream", "http", "https", "crypto", "url", "buffer", "node:fs", "node:path",
-  "node:os", "node:util", "node:child_process", "node:readline/promises", "node:process",
+const COMMON_FILENAMES = new Set([
+  "index.ts", "index.js", "index.tsx", "index.jsx",
+  "utils.ts", "utils.js", "main.ts", "main.js", "main.py",
+  "types.ts", "types.js", "styles.css", "styles.ts",
+  "constants.ts", "constants.js", "config.ts", "config.js",
+  "test.ts", "test.js", "setup.ts", "setup.js", "README.md"
 ]);
+
+function isNodeBuiltin(root: string): boolean {
+  if (root.startsWith("node:")) return true;
+  const commonBuiltins = new Set([
+    "fs", "path", "os", "util", "child_process", "readline", "process", "events",
+    "stream", "http", "https", "crypto", "url", "buffer", "assert", "dns", "zlib",
+    "cluster", "dgram", "net", "querystring", "readline", "repl", "tls", "tty", "v8", "vm", "worker_threads"
+  ]);
+  return commonBuiltins.has(root);
+}
 
 function packageDeps(): Set<string> {
   try {
@@ -38,6 +50,12 @@ export function extractImports(content: string): string[] {
 function resolveRelativeImport(fromFile: string, spec: string, planPaths: Set<string>): boolean {
   const base = join(dirname(fromFile), spec);
   const candidates = [base, `${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}.py`, join(base, "index.ts"), join(base, "index.js")];
+  
+  if (spec.endsWith(".js")) {
+    const noExt = base.slice(0, -3);
+    candidates.push(`${noExt}.ts`, `${noExt}.tsx`, join(noExt, "index.ts"));
+  }
+  
   // Files created within the same change set are valid import targets even
   // though they are not on disk yet (e.g. cart.js importing the promotion.js
   // that the very same plan introduces).
@@ -64,7 +82,7 @@ function flagChange(change: FileChange, deps: Set<string>, planPaths: Set<string
       }
     } else {
       const root = spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
-      if (!NODE_BUILTINS.has(root) && !deps.has(root)) {
+      if (!isNodeBuiltin(root) && !deps.has(root) && !existsSync(join("node_modules", root))) {
         flags.push(`${change.path}: package "${root}" is not in package.json (likely hallucinated)`);
       }
     }
@@ -82,14 +100,20 @@ function flagChange(change: FileChange, deps: Set<string>, planPaths: Set<string
   // 3. Full-file overwrites of existing files: detect silent content drops.
   if (change.kind === "full-file" && existsSync(change.path)) {
     const oldContent = readFileSync(change.path, "utf8");
-    const removed = [...exportedSymbols(oldContent)].filter((s) => !exportedSymbols(change.content).has(s));
-    if (removed.length > 0) {
-      flags.push(`${change.path}: overwrite drops existing exports: ${removed.join(", ")}`);
+    const oldExports = exportedSymbols(oldContent);
+    const newExports = exportedSymbols(change.content);
+    const removed = [...oldExports].filter((s) => !newExports.has(s));
+    
+    // Only flag if the file drops ALL of its existing exports and previously had more than 2 exports.
+    if (oldExports.size > 2 && removed.length === oldExports.size) {
+      flags.push(`${change.path}: overwrite drops ALL existing exports: ${removed.join(", ")}`);
     }
+
     const oldLines = oldContent.split("\n").length;
     const newLines = change.content.split("\n").length;
-    if (oldLines > 40 && newLines < oldLines * 0.5) {
-      flags.push(`${change.path}: overwrite shrinks file ${oldLines} -> ${newLines} lines (possible content drop)`);
+    // Severely shrunken: less than 20% of original size, only for files > 100 lines.
+    if (oldLines > 100 && newLines < oldLines * 0.2) {
+      flags.push(`${change.path}: overwrite severely shrinks file ${oldLines} -> ${newLines} lines (possible content drop)`);
     }
   }
   return flags;
@@ -105,9 +129,14 @@ export function flagHallucinations(plan: ApplyPlan): string[] {
   for (const change of plan.changes) {
     if (change.kind === "full-file" && !existsSync(change.path)) {
       const name = basename(change.path);
-      const duplicate = plan.changes.find((other) => other.path !== change.path && basename(other.path) === name) ??
-        findExistingByBasename(name);
-      if (duplicate) flags.push(`${change.path}: possible duplicate of existing file ${typeof duplicate === "string" ? duplicate : duplicate.path}`);
+      // Skip duplicate checking for common filenames (e.g., index.ts, utils.ts)
+      if (!COMMON_FILENAMES.has(name.toLowerCase())) {
+        const duplicate = plan.changes.find((other) => other.path !== change.path && basename(other.path) === name) ??
+          findExistingByBasename(name);
+        if (duplicate) {
+          flags.push(`${change.path}: possible duplicate of existing file ${typeof duplicate === "string" ? duplicate : duplicate.path}`);
+        }
+      }
     }
   }
   return flags;
